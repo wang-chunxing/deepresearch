@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep Research Report Generation System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-top: 20px;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        input[type="text"], select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+            min-height: 100px;
+        }
+        
+        button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        
+        button:hover {
+            background-color: #2980b9;
+        }
+        
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        
+        .progress-container {
+            margin: 20px 0;
+            display: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #ecf0f1;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: #3498db;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 6px;
+            display: none;
+        }
+        
+        .status.processing {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .status.completed {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.failed {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .result-container {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .result-content {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .source-item {
+            background-color: #e9ecef;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .history-item {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            background-color: #f9f9f9;
+        }
+        
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .history-query {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .history-date {
+            font-size: 14px;
+            color: #7f8c8d;
+        }
+        
+        .history-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: white;
+        }
+        
+        .status-completed {
+            background-color: #27ae60;
+        }
+        
+        .status-processing {
+            background-color: #f39c12;
+        }
+        
+        .status-failed {
+            background-color: #e74c3c;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background-color: #eee;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            border-radius: 5px 5px 0 0;
+            margin-right: 5px;
+        }
+        
+        .tab.active {
+            background-color: white;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+            font-weight: bold;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Deep Research Report Generation System</h1>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('research')">New Research</div>
+            <div class="tab" onclick="switchTab('history')">History</div>
+        </div>
+        
+        <div id="research-tab" class="tab-content active">
+            <form id="researchForm">
+                <div class="form-group">
+                    <label for="query">Research Query:</label>
+                    <input type="text" id="query" name="query" placeholder="Enter your research topic or question" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="maxSources">Max Sources:</label>
+                    <select id="maxSources" name="maxSources">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="15">15</option>
+                        <option value="20">20</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="reportFormat">Report Format:</label>
+                    <select id="reportFormat" name="reportFormat">
+                        <option value="markdown" selected>Markdown</option>
+                        <option value="html">HTML</option>
+                        <option value="text">Plain Text</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="depth">Research Depth:</label>
+                    <select id="depth" name="depth">
+                        <option value="basic">Basic</option>
+                        <option value="standard" selected>Standard</option>
+                        <option value="comprehensive">Comprehensive</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="includeSources" name="includeSources" checked> Include Source Citations
+                    </label>
+                </div>
+                
+                <button type="submit">Start Research</button>
+                <button type="button" onclick="loadHistory()">Refresh History</button>
+            </form>
+            
+            <div id="progressContainer" class="progress-container">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+                <p id="progressText">Initializing research process...</p>
+            </div>
+            
+            <div id="statusContainer" class="status"></div>
+            
+            <div id="resultContainer" class="result-container">
+                <h3>Research Report</h3>
+                <div id="resultContent" class="result-content"></div>
+                
+                <h3>Sources</h3>
+                <div id="sourcesContainer"></div>
+            </div>
+        </div>
+        
+        <div id="history-tab" class="tab-content">
+            <h2>Research History</h2>
+            <div id="historyContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        // API base URL
+        const API_BASE_URL = '/api/v1';
+        
+        // Current task ID
+        let currentTaskId = null;
+        let pollingInterval = null;
+        
+        // DOM elements
+        const researchForm = document.getElementById('researchForm');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const statusContainer = document.getElementById('statusContainer');
+        const resultContainer = document.getElementById('resultContainer');
+        const resultContent = document.getElementById('resultContent');
+        const sourcesContainer = document.getElementById('sourcesContainer');
+        const historyContainer = document.getElementById('historyContainer');
+        
+        // Event listener for form submission
+        researchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Get form values
+            const query = document.getElementById('query').value;
+            const maxSources = parseInt(document.getElementById('maxSources').value);
+            const reportFormat = document.getElementById('reportFormat').value;
+            const depth = document.getElementById('depth').value;
+            const includeSources = document.getElementById('includeSources').checked;
+            
+            // Show progress container
+            progressContainer.style.display = 'block';
+            statusContainer.style.display = 'block';
+            resultContainer.style.display = 'none';
+            
+            // Reset progress
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Initializing research process...';
+            statusContainer.className = 'status processing';
+            statusContainer.textContent = 'Initializing...';
+            
+            try {
+                // Start research task
+                const response = await fetch(`${API_BASE_URL}/research`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        max_sources: maxSources,
+                        report_format: reportFormat,
+                        include_sources: includeSources,
+                        depth: depth
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API request failed with status ${response.status}`);
+                }
+                
+                const data = await response.json();
+                currentTaskId = data.task_id;
+                
+                // Update status
+                statusContainer.textContent = `Task started: ${currentTaskId}`;
+                
+                // Start polling for status
+                startPolling();
+            } catch (error) {
+                console.error('Error starting research:', error);
+                statusContainer.className = 'status failed';
+                statusContainer.textContent = `Error: ${error.message}`;
+                progressContainer.style.display = 'none';
+            }
+        });
+        
+        // Function to start polling for task status
+        function startPolling() {
+            // Clear any existing interval
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+            
+            // Poll every 2 seconds
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/research/${currentTaskId}/status`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Status check failed with status ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // Update progress bar
+                    const progress = Math.min(100, Math.max(0, data.progress * 100));
+                    progressFill.style.width = `${progress}%`;
+                    progressText.textContent = data.message || 'Processing...';
+                    
+                    // Update status container
+                    statusContainer.textContent = `${data.status.charAt(0).toUpperCase() + data.status.slice(1)}: ${data.message}`;
+                    
+                    // Handle different statuses
+                    if (data.status === 'completed') {
+                        clearInterval(pollingInterval);
+                        await fetchAndDisplayResult();
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollingInterval);
+                        statusContainer.className = 'status failed';
+                        progressContainer.style.display = 'none';
+                    } else {
+                        statusContainer.className = 'status processing';
+                    }
+                } catch (error) {
+                    console.error('Error polling status:', error);
+                    clearInterval(pollingInterval);
+                    statusContainer.className = 'status failed';
+                    statusContainer.textContent = `Error polling status: ${error.message}`;
+                    progressContainer.style.display = 'none';
+                }
+            }, 2000);
+        }
+        
+        // Function to fetch and display the final result
+        async function fetchAndDisplayResult() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/research/${currentTaskId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Result fetch failed with status ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'completed') {
+                    statusContainer.className = 'status completed';
+                    statusContainer.textContent = 'Research completed successfully!';
+                    progressContainer.style.display = 'none';
+                    
+                    // Display the report
+                    resultContent.innerHTML = formatReport(data.report);
+                    
+                    // Display sources
+                    displaySources(data.sources || []);
+                    
+                    // Show result container
+                    resultContainer.style.display = 'block';
+                } else if (data.status === 'failed') {
+                    statusContainer.className = 'status failed';
+                    statusContainer.textContent = `Research failed: ${data.error || 'Unknown error'}`;
+                    progressContainer.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error fetching result:', error);
+                statusContainer.className = 'status failed';
+                statusContainer.textContent = `Error fetching result: ${error.message}`;
+                progressContainer.style.display = 'none';
+            }
+        }
+        
+        // Function to format the report for display
+        function formatReport(report) {
+            if (!report) return '<p>No report generated.</p>';
+            
+            // Simple markdown to HTML conversion for basic formatting
+            let formatted = report
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // Bold
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')              // Italic
+                .replace(/## (.*?)(\n|$)/g, '<h3>$1</h3>')         // H3 headers
+                .replace(/# (.*?)(\n|$)/g, '<h2>$1</h2>')          // H2 headers
+                .replace(/\n\n/g, '</p><p>')                       // Paragraphs
+                .replace(/\n/g, '<br>')                            // Line breaks
+                .replace(/^<p>/, '')                               // Remove leading <p>
+                .replace(/<\/p>$/, '');                            // Remove trailing </p>
+            
+            return `<p>${formatted}</p>`;
+        }
+        
+        // Function to display sources
+        function displaySources(sources) {
+            sourcesContainer.innerHTML = '';
+            
+            if (!sources || sources.length === 0) {
+                sourcesContainer.innerHTML = '<p>No sources available.</p>';
+                return;
+            }
+            
+            sources.forEach((source, index) => {
+                const sourceElement = document.createElement('div');
+                sourceElement.className = 'source-item';
+                
+                let sourceInfo = `<strong>Source ${index + 1}:</strong> `;
+                
+                if (source.title) {
+                    sourceInfo += `<br><strong>Title:</strong> ${source.title}<br>`;
+                }
+                
+                if (source.url) {
+                    sourceInfo += `<strong>URL:</strong> <a href="${source.url}" target="_blank">${source.url}</a><br>`;
+                }
+                
+                if (source.content) {
+                    sourceInfo += `<strong>Content Preview:</strong> ${source.content.substring(0, 200)}...<br>`;
+                }
+                
+                sourceElement.innerHTML = sourceInfo;
+                sourcesContainer.appendChild(sourceElement);
+            });
+        }
+        
+        // Function to load research history
+        async function loadHistory() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/research/history`);
+                
+                if (!response.ok) {
+                    throw new Error(`History fetch failed with status ${response.status}`);
+                }
+                
+                const history = await response.json();
+                
+                historyContainer.innerHTML = '';
+                
+                if (history.length === 0) {
+                    historyContainer.innerHTML = '<p>No research history available.</p>';
+                    return;
+                }
+                
+                history.forEach(item => {
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'history-item';
+                    
+                    const statusClass = `status-${item.status}`;
+                    const statusText = item.status.charAt(0).toUpperCase() + item.status.slice(1);
+                    
+                    const createdDate = new Date(item.created_at).toLocaleString();
+                    const completedDate = item.completed_at ? new Date(item.completed_at).toLocaleString() : 'N/A';
+                    
+                    historyItem.innerHTML = `
+                        <div class="history-header">
+                            <div class="history-query">${item.query}</div>
+                            <div>
+                                <span class="history-date">${createdDate}</span>
+                                <span class="history-status ${statusClass}">${statusText}</span>
+                            </div>
+                        </div>
+                        <div><strong>Task ID:</strong> ${item.task_id}</div>
+                        <div><strong>Completed:</strong> ${completedDate}</div>
+                        <div style="margin-top: 10px;">
+                            <button onclick="loadHistoryItem('${item.task_id}')">View Report</button>
+                            <button onclick="copyReport('${item.task_id}')">Copy Report</button>
+                        </div>
+                    `;
+                    
+                    historyContainer.appendChild(historyItem);
+                });
+            } catch (error) {
+                console.error('Error loading history:', error);
+                historyContainer.innerHTML = `<p>Error loading history: ${error.message}</p>`;
+            }
+        }
+        
+        // Function to load a specific history item
+        async function loadHistoryItem(taskId) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/research/${taskId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`History item fetch failed with status ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Switch to research tab and display the result
+                switchTab('research');
+                
+                // Hide progress and show result
+                progressContainer.style.display = 'none';
+                statusContainer.style.display = 'block';
+                statusContainer.className = 'status completed';
+                statusContainer.textContent = `Viewing history item: ${data.task_id}`;
+                
+                // Display the report
+                resultContent.innerHTML = formatReport(data.report);
+                
+                // Display sources
+                displaySources(data.sources || []);
+                
+                // Show result container
+                resultContainer.style.display = 'block';
+            } catch (error) {
+                console.error('Error loading history item:', error);
+                alert(`Error loading history item: ${error.message}`);
+            }
+        }
+        
+        // Function to copy report to clipboard
+        async function copyReport(taskId) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/research/${taskId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Report fetch failed with status ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Copy report to clipboard
+                navigator.clipboard.writeText(data.report || '')
+                    .then(() => {
+                        alert('Report copied to clipboard!');
+                    })
+                    .catch(err => {
+                        console.error('Failed to copy report: ', err);
+                        alert('Failed to copy report to clipboard.');
+                    });
+            } catch (error) {
+                console.error('Error copying report:', error);
+                alert(`Error copying report: ${error.message}`);
+            }
+        }
+        
+        // Function to switch between tabs
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content and mark tab as active
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            event.target.classList.add('active');
+            
+            // If switching to history tab, load history
+            if (tabName === 'history') {
+                loadHistory();
+            }
+        }
+        
+        // Load history on page load
+        window.addEventListener('load', () => {
+            loadHistory();
+        });
+    </script>
+</body>
+</html>

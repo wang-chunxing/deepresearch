@@ -10,7 +10,7 @@ from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.chains import LLMChain
+from langchain_core.runnables import Runnable
 
 from config import LLM_BASE_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
 from src.memory.memory_manager import MemoryManager
@@ -56,7 +56,7 @@ class ResearchAgent:
             SystemMessage(content="You are a research planning specialist. Your role is to break down complex research queries into manageable steps and create a research plan."),
             MessagesPlaceholder(variable_name="messages")
         ])
-        return LLMChain(prompt=prompt, llm=self.llm)
+        return prompt | self.llm
     
     def _create_research_agent(self):
         """Create the research agent component"""
@@ -64,7 +64,7 @@ class ResearchAgent:
             SystemMessage(content="You are a research specialist. Your role is to gather relevant information from various sources based on the research plan."),
             MessagesPlaceholder(variable_name="messages")
         ])
-        return LLMChain(prompt=prompt, llm=self.llm)
+        return prompt | self.llm
     
     def _create_analysis_agent(self):
         """Create the analysis agent component"""
@@ -72,7 +72,7 @@ class ResearchAgent:
             SystemMessage(content="You are an analysis specialist. Your role is to synthesize gathered information, identify patterns, and draw insights."),
             MessagesPlaceholder(variable_name="messages")
         ])
-        return LLMChain(prompt=prompt, llm=self.llm)
+        return prompt | self.llm
     
     def _create_validation_agent(self):
         """Create the validation agent component"""
@@ -80,7 +80,7 @@ class ResearchAgent:
             SystemMessage(content="You are a validation specialist. Your role is to verify the accuracy and reliability of information and conclusions."),
             MessagesPlaceholder(variable_name="messages")
         ])
-        return LLMChain(prompt=prompt, llm=self.llm)
+        return prompt | self.llm
     
     async def research(self, query: str, max_sources: int = 10, depth: str = "comprehensive") -> Dict[str, Any]:
         """
@@ -247,8 +247,8 @@ class ResearchAgent:
         """
         
         try:
-            analysis_response = await self.analysis_agent.acall({"messages": [HumanMessage(content=analysis_prompt)]})
-            analysis_text = analysis_response.get("text", "Analysis not available")
+            analysis_response = await self.analysis_agent.ainvoke([HumanMessage(content=analysis_prompt)])
+            analysis_text = analysis_response.content if hasattr(analysis_response, 'content') else str(analysis_response)
         except Exception as e:
             logger.error(f"Error during analysis: {str(e)}")
             analysis_text = f"Analysis failed: {str(e)}"
