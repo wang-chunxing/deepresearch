@@ -1,6 +1,6 @@
 """
-Memory Manager for Deep Research Report Generation Agent System
-Implements the memory layer based on MemGPT's layered memory architecture
+内存管理器用于深度研究报告生成代理系统
+基于MemGPT的分层内存架构实现内存层
 """
 import asyncio
 import logging
@@ -26,16 +26,16 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryType(Enum):
-    """Types of memory in the system"""
-    MAIN_CONTEXT = "main_context"      # Primary working memory (short-term)
-    EXTERNAL_STORAGE = "external_storage"  # Long-term memory (external context)
-    SCRATCHPAD = "scratchpad"          # Temporary working memory
-    CONVERSATION_HISTORY = "conversation_history"  # Historical interactions
+    """系统中的内存类型"""
+    MAIN_CONTEXT = "main_context"      # 主工作内存（短期）
+    EXTERNAL_STORAGE = "external_storage"  # 长期内存（外部上下文）
+    SCRATCHPAD = "scratchpad"          # 临时工作内存
+    CONVERSATION_HISTORY = "conversation_history"  # 历史交互
 
 
 @dataclass
 class MemoryEntry:
-    """Represents a single memory entry"""
+    """表示单个内存条目"""
     id: str
     content: str
     metadata: Dict[str, Any]
@@ -46,16 +46,16 @@ class MemoryEntry:
 
 class MemoryManager:
     """
-    Implements the memory layer based on MemGPT's layered memory architecture
-    Combines main context (working memory) with external storage (long-term memory)
+    基于MemGPT的分层内存架构实现内存层
+    结合主上下文（工作内存）和外部存储（长期内存）
     """
     
     def __init__(self):
-        self.main_context: List[MemoryEntry] = []  # Primary working memory
-        self.scratchpad: List[MemoryEntry] = []    # Temporary workspace
-        self.conversation_history: List[MemoryEntry] = []  # Historical context
+        self.main_context: List[MemoryEntry] = []  # 主工作内存
+        self.scratchpad: List[MemoryEntry] = []    # 临时工作区
+        self.conversation_history: List[MemoryEntry] = []  # 历史交互
         
-        # Initialize external memory storage using ChromaDB
+        # 使用ChromaDB初始化外部内存存储
         self.embeddings = OpenAIEmbeddings()
         self.external_memory = Chroma(
             persist_directory=CHROMA_PERSIST_DIR,
@@ -63,16 +63,16 @@ class MemoryManager:
             collection_name="external_memory"
         )
         
-        # Initialize system instructions in main context
+        # 在主上下文中初始化系统指令
         self._initialize_system_instructions()
         
-        logger.info("Memory Manager initialized with layered memory architecture")
+        logger.info("内存管理器已使用分层内存架构初始化")
     
     def _initialize_system_instructions(self):
-        """Initialize the main context with system instructions"""
+        """初始化主上下文的系统指令"""
         system_instructions = MemoryEntry(
             id="system_instructions",
-            content="You are a Deep Research Report Generation Agent. Your role is to conduct comprehensive research on topics, gather information from multiple sources, analyze the data, and generate detailed reports with proper citations.",
+            content="您是一个深度研究报告生成代理。您的角色是就主题进行全面研究，从多个来源收集信息，分析数据，并生成带有适当引用的详细报告。",
             metadata={"type": "system_instruction", "priority": "high"},
             timestamp=datetime.now(),
             memory_type=MemoryType.MAIN_CONTEXT
@@ -80,7 +80,7 @@ class MemoryManager:
         self.main_context.append(system_instructions)
     
     async def add_to_main_context(self, content: str, metadata: Dict[str, Any] = None) -> str:
-        """Add content to the main context (working memory)"""
+        """向主上下文（工作内存）添加内容"""
         if metadata is None:
             metadata = {}
         
@@ -95,36 +95,36 @@ class MemoryManager:
         
         self.main_context.append(entry)
         
-        # Check if we need to summarize or move older items to external storage
+        # 检查是否需要总结或移动较旧的项目到外部存储
         await self._manage_main_context_size()
         
-        logger.debug(f"Added to main context: {entry_id[:12]}")
+        logger.debug(f"添加到主上下文: {entry_id[:12]}")
         return entry_id
     
     async def add_to_external_memory(self, content: str, metadata: Dict[str, Any] = None) -> str:
-        """Add content to external memory storage (long-term memory)"""
+        """向外部内存存储（长期内存）添加内容"""
         if metadata is None:
             metadata = {}
         
         entry_id = f"external_{int(datetime.now().timestamp())}_{hash(content) % 10000}"
         
-        # Add to ChromaDB
+        # 添加到ChromaDB
         doc = Document(
             page_content=content,
             metadata={**metadata, "id": entry_id, "timestamp": datetime.now().isoformat()}
         )
         
-        # Add document to the collection
+        # 添加文档到集合
         added_ids = await asyncio.get_event_loop().run_in_executor(
             None, 
             lambda: self.external_memory.add_documents([doc])
         )
         
-        logger.debug(f"Added to external memory: {entry_id[:12]}")
+        logger.debug(f"添加到外部内存: {entry_id[:12]}")
         return entry_id
     
     async def add_to_scratchpad(self, content: str, metadata: Dict[str, Any] = None) -> str:
-        """Add temporary content to scratchpad"""
+        """向临时工作区添加临时内容"""
         if metadata is None:
             metadata = {}
         
@@ -141,14 +141,14 @@ class MemoryManager:
         return entry_id
     
     async def search_external_memory(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
-        """Search external memory for relevant information"""
+        """搜索外部内存的相关信息"""
         try:
             results = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.external_memory.similarity_search(query, k=k)
             )
             
-            # Format results
+            # 格式化结果
             formatted_results = []
             for doc in results:
                 formatted_results.append({
@@ -157,59 +157,59 @@ class MemoryManager:
                     "id": doc.metadata.get("id", "unknown")
                 })
             
-            logger.debug(f"Found {len(formatted_results)} results from external memory")
+            logger.debug(f"从外部内存找到 {len(formatted_results)} 个结果")
             return formatted_results
         except Exception as e:
-            logger.error(f"Error searching external memory: {str(e)}")
+            logger.error(f"搜索外部内存时出错: {str(e)}")
             return []
     
     async def get_main_context_content(self) -> List[Dict[str, Any]]:
-        """Get all content from main context"""
+        """获取主上下文的所有内容"""
         return [asdict(entry) for entry in self.main_context]
     
     async def get_scratchpad_content(self) -> List[Dict[str, Any]]:
-        """Get all content from scratchpad"""
+        """获取临时工作区的所有内容"""
         return [asdict(entry) for entry in self.scratchpad]
     
     async def clear_scratchpad(self):
-        """Clear the scratchpad memory"""
+        """清除临时工作区内存"""
         self.scratchpad = []
-        logger.debug("Scratchpad cleared")
+        logger.debug("临时工作区已清除")
     
     async def _manage_main_context_size(self):
-        """Manage the size of main context to prevent overflow"""
-        # Calculate approximate token count (rough estimation: 1 token ~ 4 characters)
+        """管理主上下文大小以防止溢出"""
+        # 计算近似令牌数（粗略估计：1令牌 ~ 4个字符）
         total_chars = sum(len(entry.content) for entry in self.main_context)
         
         if total_chars > MAIN_CONTEXT_SIZE:
-            logger.info(f"Main context size ({total_chars} chars) exceeds threshold ({MAIN_CONTEXT_SIZE}), managing...")
+            logger.info(f"主上下文大小 ({total_chars} 个字符) 超过阈值 ({MAIN_CONTEXT_SIZE})，正在管理...")
             
-            # Move older entries to external memory (except system instructions)
+            # 将较旧的条目移动到外部内存（系统指令除外）
             entries_to_move = []
             for entry in self.main_context:
                 if entry.metadata.get("type") != "system_instruction":
                     entries_to_move.append(entry)
             
-            # Keep the most recent entries in main context
-            keep_count = max(2, len(self.main_context) // 2)  # Keep at least 2 entries
+            # 在主上下文中保留最新条目
+            keep_count = max(2, len(self.main_context) // 2)  # 至少保留2个条目
             entries_to_keep = self.main_context[:len(self.main_context) - len(entries_to_move)] + \
                              entries_to_move[-keep_count:]
             
-            # Move older entries to external memory
+            # 将较旧的条目移动到外部内存
             for entry in entries_to_move[:-keep_count]:
                 await self.add_to_external_memory(entry.content, entry.metadata)
             
-            # Update main context
+            # 更新主上下文
             self.main_context = entries_to_keep
-            logger.info(f"Moved {len(entries_to_move) - keep_count} entries to external memory")
+            logger.info(f"已将 {len(entries_to_move) - keep_count} 个条目移动到外部内存")
     
     async def get_conversation_history(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get recent conversation history"""
+        """获取最近的对话历史"""
         recent_history = self.conversation_history[-limit:] if len(self.conversation_history) > limit else self.conversation_history
         return [asdict(entry) for entry in recent_history]
     
     async def add_to_conversation_history(self, role: str, content: str, metadata: Dict[str, Any] = None) -> str:
-        """Add an entry to conversation history"""
+        """向对话历史添加条目"""
         if metadata is None:
             metadata = {}
         
@@ -226,32 +226,32 @@ class MemoryManager:
         return entry_id
     
     async def reset_memory(self):
-        """Reset all memory components (for testing or new sessions)"""
+        """重置所有内存组件（用于测试或新会话）"""
         self.main_context = []
         self.scratchpad = []
         self.conversation_history = []
         
-        # Reinitialize system instructions
+        # 重新初始化系统指令
         self._initialize_system_instructions()
         
-        # Clear external memory
-        # Note: In a real implementation, you might want to keep some long-term knowledge
-        # For now, we'll just recreate the collection
+        # 清除外部内存
+        # 注意：在实际实现中，您可能希望保留一些长期知识
+        # 目前，我们只是重新创建集合
         self.external_memory = Chroma(
             persist_directory=CHROMA_PERSIST_DIR,
             embedding_function=self.embeddings,
             collection_name="external_memory"
         )
         
-        logger.info("Memory reset completed")
+        logger.info("内存重置完成")
     
     async def get_memory_stats(self) -> Dict[str, Any]:
-        """Get statistics about memory usage"""
+        """获取内存使用统计信息"""
         main_context_chars = sum(len(entry.content) for entry in self.main_context)
         scratchpad_chars = sum(len(entry.content) for entry in self.scratchpad)
         conversation_count = len(self.conversation_history)
         
-        # Get count from external memory
+        # 从外部内存获取计数
         external_count = 0
         try:
             external_count = await asyncio.get_event_loop().run_in_executor(
@@ -259,7 +259,7 @@ class MemoryManager:
                 lambda: self.external_memory._collection.count()
             )
         except:
-            # If count fails, we'll just set it to 0
+            # 如果计数失败，我们将其设置为0
             external_count = 0
         
         return {
