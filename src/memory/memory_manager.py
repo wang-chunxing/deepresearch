@@ -13,7 +13,7 @@ from enum import Enum
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from config import (
     CHROMA_PERSIST_DIR,

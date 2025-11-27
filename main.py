@@ -5,6 +5,7 @@ Based on the system architecture design document
 import uvicorn
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import logging
@@ -59,6 +60,9 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(api_router, prefix="/api/v1", tags=["research-agent"])
+
+# Mount frontend static files
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
 # Initialize core components
 @app.on_event("startup")
