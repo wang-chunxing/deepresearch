@@ -11,15 +11,18 @@ import os
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
+import requests
 from langchain_core.documents import Document
 
 from config import (
+    LLM_PROVIDER,
     CHROMA_PERSIST_DIR,
     MAIN_CONTEXT_SIZE,
     EXTERNAL_CONTEXT_SIZE,
-    MEMORY_SUMMARY_THRESHOLD
+    MEMORY_SUMMARY_THRESHOLD,
+    DOUBAO_EMBEDDING_API_ENDPOINT,
+    DOUBAO_EMBEDDING_MODEL,
+    ARK_API_KEY
 )
 
 logger = logging.getLogger(__name__)
@@ -55,13 +58,43 @@ class MemoryManager:
         self.scratchpad: List[MemoryEntry] = []    # 临时工作区
         self.conversation_history: List[MemoryEntry] = []  # 历史交互
         
-        # 使用ChromaDB初始化外部内存存储
-        self.embeddings = OpenAIEmbeddings()
-        self.external_memory = Chroma(
-            persist_directory=CHROMA_PERSIST_DIR,
-            embedding_function=self.embeddings,
-            collection_name="external_memory"
-        )
+        self.external_memory = None
+        self.embeddings = None
+        if ARK_API_KEY and DOUBAO_EMBEDDING_API_ENDPOINT and DOUBAO_EMBEDDING_MODEL:
+            class DoubaoEmbeddings:
+                def __init__(self, api_key: str, endpoint: str, model: str):
+                    self.api_key = api_key
+                    self.endpoint = endpoint
+                    self.model = model
+                def _embed(self, inputs: List[str]) -> List[List[float]]:
+                    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
+                    is_multimodal = "multimodal" in (self.endpoint or "")
+                    if is_multimodal:
+                        mm_inputs = [{"type": "text", "text": t} for t in inputs]
+                        payload = {"model": self.model, "input": mm_inputs}
+                    else:
+                        payload = {"model": self.model, "input": inputs}
+                    resp = requests.post(self.endpoint, json=payload, headers=headers, timeout=(15, 60))
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if isinstance(data, dict) and "data" in data:
+                        return [item.get("embedding", []) for item in data.get("data", [])]
+                    raise ValueError("invalid embedding response")
+                def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                    return self._embed(texts)
+                def embed_query(self, text: str) -> List[float]:
+                    vecs = self._embed([text])
+                    return vecs[0] if vecs else []
+            self.embeddings = DoubaoEmbeddings(ARK_API_KEY, DOUBAO_EMBEDDING_API_ENDPOINT, DOUBAO_EMBEDDING_MODEL)
+            try:
+                from langchain_chroma import Chroma
+                self.external_memory = Chroma(
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    embedding_function=self.embeddings,
+                    collection_name="external_memory"
+                )
+            except Exception:
+                self.external_memory = None
         
         # 在主上下文中初始化系统指令
         self._initialize_system_instructions()
@@ -108,17 +141,18 @@ class MemoryManager:
         
         entry_id = f"external_{int(datetime.now().timestamp())}_{hash(content) % 10000}"
         
-        # 添加到ChromaDB
-        doc = Document(
-            page_content=content,
-            metadata={**metadata, "id": entry_id, "timestamp": datetime.now().isoformat()}
-        )
-        
-        # 添加文档到集合
-        added_ids = await asyncio.get_event_loop().run_in_executor(
-            None, 
-            lambda: self.external_memory.add_documents([doc])
-        )
+        if self.external_memory:
+            # 添加到ChromaDB
+            doc = Document(
+                page_content=content,
+                metadata={**metadata, "id": entry_id, "timestamp": datetime.now().isoformat()}
+            )
+            
+            # 添加文档到集合
+            added_ids = await asyncio.get_event_loop().run_in_executor(
+                None, 
+                lambda: self.external_memory.add_documents([doc])
+            )
         
         logger.debug(f"添加到外部内存: {entry_id[:12]}")
         return entry_id
@@ -142,25 +176,28 @@ class MemoryManager:
     
     async def search_external_memory(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """搜索外部内存的相关信息"""
-        try:
-            results = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self.external_memory.similarity_search(query, k=k)
-            )
-            
-            # 格式化结果
-            formatted_results = []
-            for doc in results:
-                formatted_results.append({
-                    "content": doc.page_content,
-                    "metadata": doc.metadata,
-                    "id": doc.metadata.get("id", "unknown")
-                })
-            
-            logger.debug(f"从外部内存找到 {len(formatted_results)} 个结果")
-            return formatted_results
-        except Exception as e:
-            logger.error(f"搜索外部内存时出错: {str(e)}")
+        if self.external_memory:
+            try:
+                results = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.external_memory.similarity_search(query, k=k)
+                )
+                
+                # 格式化结果
+                formatted_results = []
+                for doc in results:
+                    formatted_results.append({
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "id": doc.metadata.get("id", "unknown")
+                    })
+                
+                logger.debug(f"从外部内存找到 {len(formatted_results)} 个结果")
+                return formatted_results
+            except Exception as e:
+                logger.error(f"搜索外部内存时出错: {str(e)}")
+                return []
+        else:
             return []
     
     async def get_main_context_content(self) -> List[Dict[str, Any]]:
@@ -234,14 +271,12 @@ class MemoryManager:
         # 重新初始化系统指令
         self._initialize_system_instructions()
         
-        # 清除外部内存
-        # 注意：在实际实现中，您可能希望保留一些长期知识
-        # 目前，我们只是重新创建集合
-        self.external_memory = Chroma(
-            persist_directory=CHROMA_PERSIST_DIR,
-            embedding_function=self.embeddings,
-            collection_name="external_memory"
-        )
+        if self.embeddings is not None:
+            self.external_memory = Chroma(
+                persist_directory=CHROMA_PERSIST_DIR,
+                embedding_function=self.embeddings,
+                collection_name="external_memory"
+            )
         
         logger.info("内存重置完成")
     

@@ -110,7 +110,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host=API_HOST,
-        port=API_PORT,
+        port=8001,  # 直接使用8001端口
         reload=DEBUG_MODE,
         log_level=LOG_LEVEL.lower()
     )

@@ -89,6 +89,31 @@ async def start_research(request: ResearchRequest):
     )
 
 
+@api_router.get("/research/history", response_model=List[ResearchResponse], tags=["research"])
+async def get_research_history():
+    """
+    获取历史研究任务。
+    这实现了我们架构中的事件流记录。
+    """
+    responses = []
+    for task_id, task in task_storage.items():
+        response = ResearchResponse(
+            task_id=task_id,
+            status=task["status"],
+            query=task["query"],
+            created_at=task["created_at"],
+            completed_at=task.get("completed_at"),
+            report=task.get("report"),
+            sources=task.get("sources"),
+            error=task.get("error")
+        )
+        responses.append(response)
+    
+    # 按创建时间排序，最新的在前
+    responses.sort(key=lambda x: x.created_at, reverse=True)
+    return responses
+
+
 @api_router.get("/research/{task_id}", response_model=ResearchResponse, tags=["research"])
 async def get_research_result(task_id: str):
     """
@@ -130,31 +155,6 @@ async def get_task_status(task_id: str):
         message=task.get("message", ""),
         completed_at=task.get("completed_at")
     )
-
-
-@api_router.get("/research/history", response_model=List[ResearchResponse], tags=["research"])
-async def get_research_history():
-    """
-    获取历史研究任务。
-    这实现了我们架构中的事件流记录。
-    """
-    responses = []
-    for task_id, task in task_storage.items():
-        response = ResearchResponse(
-            task_id=task_id,
-            status=task["status"],
-            query=task["query"],
-            created_at=task["created_at"],
-            completed_at=task.get("completed_at"),
-            report=task.get("report"),
-            sources=task.get("sources"),
-            error=task.get("error")
-        )
-        responses.append(response)
-    
-    # 按创建时间排序，最新的在前
-    responses.sort(key=lambda x: x.created_at, reverse=True)
-    return responses
 
 
 # 后台任务实现

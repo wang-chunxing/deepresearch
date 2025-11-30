@@ -301,7 +301,33 @@
 
     <script>
         // API base URL
-        const API_BASE_URL = '/api/v1';
+        const API_BASE_URL = 'http://localhost:8001/api/v1';
+    // 手动触发一个测试任务以初始化系统
+    async function createTestTask() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/research`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query: '测试任务',
+            max_sources: 3,
+            report_format: 'markdown',
+            include_sources: true,
+            depth: 'basic'
+          })
+        });
+        const data = await response.json();
+        console.log('测试任务创建成功:', data);
+      } catch (error) {
+        console.error('创建测试任务失败:', error);
+      }
+    }
+    // 页面加载时执行
+    window.onload = function() {
+      createTestTask();
+    };
         
         // Current task ID
         let currentTaskId = null;

@@ -5,15 +5,37 @@ Based on the system architecture design document
 import os
 from typing import Optional
 
-# LLM Configuration
-LLM_BASE_MODEL = os.getenv("LLM_BASE_MODEL", "gpt-4-turbo")  # Based on architecture recommendation
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+# LLM Provider Configuration
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "doubao").lower()  # Options: openai, doubao
+
+# OpenAI Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_MODEL = os.getenv("OPENAI_BASE_MODEL", "gpt-4-turbo")
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "4096"))
+
+# Doubao Configuration
+ARK_API_KEY = os.getenv("ARK_API_KEY", "")
+DOUBAO_MODEL = os.getenv("DOUBAO_MODEL", "doubao-seed-1-6-251015")
+DOUBAO_API_ENDPOINT = os.getenv("DOUBAO_API_ENDPOINT", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+DOUBAO_MAX_COMPLETION_TOKENS = int(os.getenv("DOUBAO_MAX_COMPLETION_TOKENS", "65535"))
+DOUBAO_REASONING_EFFORT = os.getenv("DOUBAO_REASONING_EFFORT", "medium")
+DOUBAO_TEMPERATURE = float(os.getenv("DOUBAO_TEMPERATURE", "0.7"))
+
+# LLM Configuration (Backward compatibility)
+LLM_BASE_MODEL = OPENAI_BASE_MODEL
+LLM_TEMPERATURE = OPENAI_TEMPERATURE
+LLM_MAX_TOKENS = OPENAI_MAX_TOKENS
 
 # Vector Database Configuration
 VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")  # Based on architecture recommendation
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./vector_db")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+
+# Embeddings Configuration
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "doubao").lower()
+DOUBAO_EMBEDDING_API_ENDPOINT = os.getenv("DOUBAO_EMBEDDING_API_ENDPOINT", "")
+DOUBAO_EMBEDDING_MODEL = os.getenv("DOUBAO_EMBEDDING_MODEL", "")
 
 # Memory Layer Configuration (Based on MemGPT's layered memory architecture)
 MAIN_CONTEXT_SIZE = int(os.getenv("MAIN_CONTEXT_SIZE", "8192"))  # Tokens in main context
@@ -22,7 +44,7 @@ MEMORY_SUMMARY_THRESHOLD = int(os.getenv("MEMORY_SUMMARY_THRESHOLD", "1000"))  #
 
 # API Configuration
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", "8000"))
+API_PORT = int(os.getenv("API_PORT", "8001"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 
 # Agent Configuration

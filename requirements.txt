@@ -31,3 +31,18 @@ tavily-python==0.3.3
 llmsherpa==0.1.0
 unstructured==0.13.6
 pdfplumber==0.10.4
+langchain-chroma==0.1.1
+# 异步相关依赖
+aiohttp==3.9.3
+# 网页抓取和搜索工具依赖
+ddgs==5.3.0  # duckduckgo-search 的新版本名称
+langchain_chroma
+uvicorn
+fastapi
+langchain_openai
+requests
+langchain
+jinja2
+aiohttp
+duckduckgo_search
+beautifulsoup4
