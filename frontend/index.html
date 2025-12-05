@@ -237,39 +237,7 @@
                     <input type="text" id="query" name="query" placeholder="Enter your research topic or question" required>
                 </div>
                 
-                <div class="form-group">
-                    <label for="maxSources">Max Sources:</label>
-                    <select id="maxSources" name="maxSources">
-                        <option value="5">5</option>
-                        <option value="10" selected>10</option>
-                        <option value="15">15</option>
-                        <option value="20">20</option>
-                    </select>
-                </div>
                 
-                <div class="form-group">
-                    <label for="reportFormat">Report Format:</label>
-                    <select id="reportFormat" name="reportFormat">
-                        <option value="markdown" selected>Markdown</option>
-                        <option value="html">HTML</option>
-                        <option value="text">Plain Text</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="depth">Research Depth:</label>
-                    <select id="depth" name="depth">
-                        <option value="basic">Basic</option>
-                        <option value="standard" selected>Standard</option>
-                        <option value="comprehensive">Comprehensive</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="includeSources" name="includeSources" checked> Include Source Citations
-                    </label>
-                </div>
                 
                 <button type="submit">Start Research</button>
                 <button type="button" onclick="loadHistory()">Refresh History</button>
@@ -302,32 +270,7 @@
     <script>
         // API base URL
         const API_BASE_URL = 'http://localhost:8001/api/v1';
-    // 手动触发一个测试任务以初始化系统
-    async function createTestTask() {
-      try {
-        const response = await fetch(`${API_BASE_URL}/research`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            query: '测试任务',
-            max_sources: 3,
-            report_format: 'markdown',
-            include_sources: true,
-            depth: 'basic'
-          })
-        });
-        const data = await response.json();
-        console.log('测试任务创建成功:', data);
-      } catch (error) {
-        console.error('创建测试任务失败:', error);
-      }
-    }
-    // 页面加载时执行
-    window.onload = function() {
-      createTestTask();
-    };
+    // 取消自动创建测试任务，避免噪音检索
         
         // Current task ID
         let currentTaskId = null;
@@ -350,10 +293,7 @@
             
             // Get form values
             const query = document.getElementById('query').value;
-            const maxSources = parseInt(document.getElementById('maxSources').value);
-            const reportFormat = document.getElementById('reportFormat').value;
-            const depth = document.getElementById('depth').value;
-            const includeSources = document.getElementById('includeSources').checked;
+            
             
             // Show progress container
             progressContainer.style.display = 'block';
@@ -374,11 +314,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        query: query,
-                        max_sources: maxSources,
-                        report_format: reportFormat,
-                        include_sources: includeSources,
-                        depth: depth
+                        query: query
                     })
                 });
                 
@@ -500,6 +436,7 @@
                 .replace(/\n/g, '<br>')                            // Line breaks
                 .replace(/^<p>/, '')                               // Remove leading <p>
                 .replace(/<\/p>$/, '');                            // Remove trailing </p>
+            formatted = formatted.replace(/```mermaid([\s\S]*?)```/g, '<pre>$1</pre>');
             
             return `<p>${formatted}</p>`;
         }
@@ -574,10 +511,12 @@
                         </div>
                         <div><strong>Task ID:</strong> ${item.task_id}</div>
                         <div><strong>Completed:</strong> ${completedDate}</div>
-                        <div style="margin-top: 10px;">
-                            <button onclick="loadHistoryItem('${item.task_id}')">View Report</button>
-                            <button onclick="copyReport('${item.task_id}')">Copy Report</button>
-                        </div>
+                <div style="margin-top: 10px;">
+                    <button onclick="loadHistoryItem('${item.task_id}')">View Report</button>
+                    <button onclick="copyReport('${item.task_id}')">Copy Report</button>
+                    <button onclick="downloadReport('${item.task_id}','markdown')">Download MD</button>
+                    <button onclick="downloadReport('${item.task_id}','html')">Download HTML</button>
+                </div>
                     `;
                     
                     historyContainer.appendChild(historyItem);
@@ -645,6 +584,24 @@
             } catch (error) {
                 console.error('Error copying report:', error);
                 alert(`Error copying report: ${error.message}`);
+            }
+        }
+
+        async function downloadReport(taskId, format) {
+            try {
+                const resp = await fetch(`${API_BASE_URL}/research/${taskId}/download?format=${format}`);
+                if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+                const blob = await resp.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `report_${taskId}.${format === 'html' ? 'html' : 'md'}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            } catch (e) {
+                alert(e.message);
             }
         }
         

@@ -10,6 +10,7 @@ import pickle
 import os
 from dataclasses import dataclass, asdict
 from enum import Enum
+import json
 
 import requests
 from langchain_core.documents import Document
@@ -24,6 +25,7 @@ from config import (
     DOUBAO_EMBEDDING_MODEL,
     ARK_API_KEY
 )
+from src.llm.doubao import DoubaoEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -61,30 +63,6 @@ class MemoryManager:
         self.external_memory = None
         self.embeddings = None
         if ARK_API_KEY and DOUBAO_EMBEDDING_API_ENDPOINT and DOUBAO_EMBEDDING_MODEL:
-            class DoubaoEmbeddings:
-                def __init__(self, api_key: str, endpoint: str, model: str):
-                    self.api_key = api_key
-                    self.endpoint = endpoint
-                    self.model = model
-                def _embed(self, inputs: List[str]) -> List[List[float]]:
-                    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
-                    is_multimodal = "multimodal" in (self.endpoint or "")
-                    if is_multimodal:
-                        mm_inputs = [{"type": "text", "text": t} for t in inputs]
-                        payload = {"model": self.model, "input": mm_inputs}
-                    else:
-                        payload = {"model": self.model, "input": inputs}
-                    resp = requests.post(self.endpoint, json=payload, headers=headers, timeout=(15, 60))
-                    resp.raise_for_status()
-                    data = resp.json()
-                    if isinstance(data, dict) and "data" in data:
-                        return [item.get("embedding", []) for item in data.get("data", [])]
-                    raise ValueError("invalid embedding response")
-                def embed_documents(self, texts: List[str]) -> List[List[float]]:
-                    return self._embed(texts)
-                def embed_query(self, text: str) -> List[float]:
-                    vecs = self._embed([text])
-                    return vecs[0] if vecs else []
             self.embeddings = DoubaoEmbeddings(ARK_API_KEY, DOUBAO_EMBEDDING_API_ENDPOINT, DOUBAO_EMBEDDING_MODEL)
             try:
                 from langchain_chroma import Chroma
@@ -98,6 +76,9 @@ class MemoryManager:
         
         # 在主上下文中初始化系统指令
         self._initialize_system_instructions()
+        self.knowledge_graph_path = os.path.join(CHROMA_PERSIST_DIR, "knowledge_graph.json")
+        self.knowledge_graph: Dict[str, Dict[str, Any]] = {}
+        self._load_graph()
         
         logger.info("内存管理器已使用分层内存架构初始化")
     
@@ -156,6 +137,20 @@ class MemoryManager:
         
         logger.debug(f"添加到外部内存: {entry_id[:12]}")
         return entry_id
+
+    def add_graph_edge(self, source: str, relation: str, target: str, metadata: Dict[str, Any] = None) -> None:
+        if metadata is None:
+            metadata = {}
+        node = self.knowledge_graph.get(source, {"edges": []})
+        node["edges"].append({"relation": relation, "target": target, "metadata": {**metadata, "timestamp": datetime.now().isoformat()}})
+        self.knowledge_graph[source] = node
+        if target not in self.knowledge_graph:
+            self.knowledge_graph[target] = {"edges": []}
+        self._save_graph()
+
+    def get_graph_neighbors(self, entity: str) -> List[Dict[str, Any]]:
+        node = self.knowledge_graph.get(entity, {"edges": []})
+        return node["edges"]
     
     async def add_to_scratchpad(self, content: str, metadata: Dict[str, Any] = None) -> str:
         """向临时工作区添加临时内容"""
@@ -199,6 +194,22 @@ class MemoryManager:
                 return []
         else:
             return []
+
+    def compress_results(self, items: List[Dict[str, Any]], top_k: int = 20) -> List[Dict[str, Any]]:
+        seen = set()
+        uniq: List[Dict[str, Any]] = []
+        for it in items:
+            h = hash(it.get("content", "")[:512])
+            if h in seen:
+                continue
+            seen.add(h)
+            uniq.append(it)
+        scored = []
+        for it in uniq:
+            s = it.get("source", {}).get("relevance_score", 0.0)
+            scored.append((s, it))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [x[1] for x in scored[:top_k]]
     
     async def get_main_context_content(self) -> List[Dict[str, Any]]:
         """获取主上下文的所有内容"""
@@ -279,6 +290,22 @@ class MemoryManager:
             )
         
         logger.info("内存重置完成")
+
+    def _save_graph(self):
+        try:
+            os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+            with open(self.knowledge_graph_path, "w", encoding="utf-8") as f:
+                json.dump(self.knowledge_graph, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _load_graph(self):
+        try:
+            if os.path.exists(self.knowledge_graph_path):
+                with open(self.knowledge_graph_path, "r", encoding="utf-8") as f:
+                    self.knowledge_graph = json.load(f)
+        except Exception:
+            self.knowledge_graph = {}
     
     async def get_memory_stats(self) -> Dict[str, Any]:
         """获取内存使用统计信息"""

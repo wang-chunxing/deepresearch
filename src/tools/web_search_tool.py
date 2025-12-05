@@ -11,8 +11,13 @@ from typing import List, Dict, Any, Optional, Tuple
 import aiohttp
 import requests
 from bs4 import BeautifulSoup
+try:
+    from duckduckgo_search import DDGS
+except Exception:
+    DDGS = None
 
-from config import MAX_SEARCH_RESULTS
+from config import MAX_SEARCH_RESULTS, SEARCH_DISABLE_DDG
+from .source_curator import SourceCurator
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,9 @@ class WebSearchTool:
         self.search_sources = self._initialize_search_sources()
         # 初始化问题类型关键词
         self.query_type_keywords = self._initialize_query_type_keywords()
+        # 简易缓存，降低速率限制触发
+        self._cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._disable_ddg = SEARCH_DISABLE_DDG
     
     def _initialize_search_sources(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -94,6 +102,51 @@ class WebSearchTool:
                     "url": "https://devdocs.io/#q={query}",
                     "priority": 0.7,
                     "description": "开发者文档集合，多语言API参考"
+                }
+            ],
+            # 行业与垂直领域来源
+            "industry": [
+                {
+                    "name": "supplychaindigital",
+                    "url": "https://www.supplychaindigital.com/search?q={query}",
+                    "priority": 0.85,
+                    "description": "供应链行业资讯与案例"
+                },
+                {
+                    "name": "sciencedirect",
+                    "url": "https://www.sciencedirect.com/search?qs={query}",
+                    "priority": 0.8,
+                    "description": "Elsevier 学术与行业研究"
+                },
+                {
+                    "name": "mdpi",
+                    "url": "https://www.mdpi.com/search?s={query}",
+                    "priority": 0.78,
+                    "description": "MDPI 开放获取期刊"
+                },
+                {
+                    "name": "springer",
+                    "url": "https://link.springer.com/search?query={query}",
+                    "priority": 0.75,
+                    "description": "Springer 文献与行业研究"
+                },
+                {
+                    "name": "bytedance_official",
+                    "url": "https://www.bytedance.com/zh",
+                    "priority": 0.95,
+                    "description": "字节跳动官网"
+                },
+                {
+                    "name": "tiktok_newsroom",
+                    "url": "https://newsroom.tiktok.com/",
+                    "priority": 0.9,
+                    "description": "TikTok 新闻室"
+                },
+                {
+                    "name": "lark_blog",
+                    "url": "https://www.larksuite.com/blog",
+                    "priority": 0.85,
+                    "description": "飞书博客"
                 }
             ],
             # 一般性知识搜索来源
@@ -184,6 +237,12 @@ class WebSearchTool:
                 "debug", "framework", "library", "setup", "configure", 
                 "install", "deploy", "tutorial", "guide", "optimize"
             ],
+            "industry": [
+                "供应链", "物流", "制造", "工业", "质量", "检测", "风控", "金融",
+                "行业", "案例", "白皮书", "趋势", "前沿", "报告",
+                "supply chain", "logistics", "manufacturing", "quality", "inspection",
+                "risk control", "finance", "industry", "case study", "whitepaper", "trend"
+            ],
             "tech_news": [
                 "新闻", "最新", "动态", "趋势", "发展", "发布", "更新",
                 "公告", "报道", "消息", "事件", "发布会", "新品", "上市",
@@ -198,7 +257,7 @@ class WebSearchTool:
         返回最匹配的问题类型
         """
         query_lower = query.lower()
-        type_scores = {"general": 0, "academic": 0, "technical": 0, "tech_news": 0}
+        type_scores = {"general": 0, "academic": 0, "technical": 0, "tech_news": 0, "industry": 0}
         
         # 计算每种类型的匹配分数
         for query_type, keywords in self.query_type_keywords.items():
@@ -215,6 +274,19 @@ class WebSearchTool:
         
         logger.info(f"Classified query '{query}' as type: {max_type} (scores: {type_scores})")
         return max_type
+
+    def _inject_framework_sources(self, query: str, sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        ql = query.lower()
+        injected = list(sources)
+        try:
+            if 'langchain' in ql:
+                injected = [
+                    {"name": "langchain_docs", "url": "https://python.langchain.com/docs/", "priority": 0.95, "description": "LangChain 官方文档"},
+                    {"name": "langchain_github", "url": "https://github.com/langchain-ai/langchain", "priority": 0.93, "description": "LangChain GitHub 仓库"},
+                ] + injected
+        except Exception:
+            pass
+        return injected
     
     def _get_search_sources_for_query(self, query: str, max_sources: int = 5) -> List[Dict[str, Any]]:
         """
@@ -231,6 +303,8 @@ class WebSearchTool:
         
         # 截取指定数量的来源
         selected_sources = sources[:max_sources]
+        # 针对框架类主题注入高质量来源
+        selected_sources = self._inject_framework_sources(query, selected_sources)
         
         logger.info(f"Selected {len(selected_sources)} search sources for query type '{query_type}'")
         return selected_sources
@@ -243,37 +317,125 @@ class WebSearchTool:
         logger.info(f"Performing intelligent web search for: {query[:50]}...")
         
         try:
-            # 根据查询类型获取搜索来源
-            search_sources = self._get_search_sources_for_query(query)
+            # 缓存命中直接返回
+            if query in self._cache:
+                cached = self._cache[query]
+                return cached[:max_results]
+            # 构建结果集合
+            all_results: List[Dict[str, Any]] = []
+            qtype = self._classify_query_type(query)
+
+            # 其次使用 DuckDuckGo 真实搜索（文本/新闻）
+            qtype = self._classify_query_type(query)
+            ddg_query = self._augment_query_for_type(query, qtype)
+            if DDGS is not None and not self._disable_ddg:
+                try:
+                    def _ddg_text(q: str, max_r: int):
+                        with DDGS() as ddgs:
+                            return list(ddgs.text(q, max_results=max_r))
+                    raw = await asyncio.get_event_loop().run_in_executor(None, lambda: _ddg_text(ddg_query, max_results))
+                    for r in raw:
+                        all_results.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("href", r.get("url", "")),
+                            "content": r.get("body", ""),
+                            "source": "duckduckgo",
+                            "source_type": qtype,
+                            "relevance_score": 0.8
+                        })
+                    # 新闻补充（面向 tech_news）
+                    if qtype == "tech_news":
+                        def _ddg_news(q: str, max_r: int):
+                            with DDGS() as ddgs:
+                                return list(ddgs.news(q, max_results=max_r))
+                        news_raw = await asyncio.get_event_loop().run_in_executor(None, lambda: _ddg_news(query, max_results))
+                        for r in news_raw:
+                            all_results.append({
+                                "title": r.get("title", ""),
+                                "url": r.get("url", ""),
+                                "content": r.get("excerpt", ""),
+                                "source": "duckduckgo_news",
+                                "source_type": "tech_news",
+                                "relevance_score": 0.75
+                            })
+                except Exception as e:
+                    logger.info(f"DuckDuckGo unavailable: {str(e)}; using fallback sources")
             
-            # 从不同来源获取搜索结果
-            all_results = []
-            
-            # 首先从主要来源获取结果（基于类型的来源）
-            for source in search_sources:
-                source_results = await self._get_source_results(query, source, max_results // len(search_sources))
-                all_results.extend(source_results)
-            
-            # 确保有足够的结果，如果不足则使用通用搜索补充
+            # 如果真实搜索不足，再回退到类型来源的模拟/补充
             if len(all_results) < max_results:
-                additional_count = max_results - len(all_results)
-                # 使用通用搜索获取补充结果
-                general_sources = self.search_sources.get("general", [])[:3]  # 取前3个通用来源
-                for source in general_sources:
-                    if len(all_results) >= max_results:
-                        break
-                    source_results = await self._get_source_results(
-                        query, 
-                        source, 
-                        additional_count // len(general_sources) + 1
-                    )
-                    all_results.extend(source_results)
+                search_sources = self._get_search_sources_for_query(query)
+                for source in search_sources:
+                    extra = await self._get_source_results(query, source, max(1, (max_results - len(all_results)) // max(1, len(search_sources))))
+                    all_results.extend(extra)
+
+                # Wikipedia 综述补充
+                if len(all_results) < max_results and wikipedia is not None:
+                    try:
+                        def _wiki(q: str):
+                            titles = wikipedia.search(q) or []
+                            items = []
+                            for t in titles[:3]:
+                                try:
+                                    summary = wikipedia.summary(t, sentences=5)
+                                    page = wikipedia.page(t, auto_suggest=False)
+                                    items.append({
+                                        "title": t,
+                                        "url": page.url,
+                                        "content": summary,
+                                        "source": "wikipedia",
+                                        "source_type": "general",
+                                        "relevance_score": 0.75
+                                    })
+                                except Exception:
+                                    continue
+                            return items
+                        wiki_items = await asyncio.get_event_loop().run_in_executor(None, lambda: _wiki(query))
+                        all_results.extend(wiki_items)
+                    except Exception as e:
+                        logger.warning(f"Wikipedia fallback failed: {str(e)}")
+
+                # ArXiv 学术补充
+                qtype2 = self._classify_query_type(query)
+                if len(all_results) < max_results and arxiv is not None and qtype2 == "academic":
+                    try:
+                        def _arxiv(q: str):
+                            search = arxiv.Search(query=q, max_results=3)
+                            items = []
+                            for r in search.results():
+                                items.append({
+                                    "title": r.title,
+                                    "url": r.entry_id,
+                                    "content": r.summary,
+                                    "source": "arxiv",
+                                    "source_type": "academic",
+                                    "relevance_score": 0.8
+                                })
+                            return items
+                        arxiv_items = await asyncio.get_event_loop().run_in_executor(None, lambda: _arxiv(query))
+                        all_results.extend(arxiv_items)
+                    except Exception as e:
+                        logger.warning(f"ArXiv fallback failed: {str(e)}")
             
-            # 去重并限制结果数量
+            # 去重、过滤并限制结果数量
             results = self._deduplicate_results(all_results)
+            results = [r for r in results if self._is_content_url(r.get("url", ""))]
+            # 若有效结果不足，注入策展源（直接内容页，交由后续抓取）
+            if len(results) < max_results:
+                curator = SourceCurator()
+                curated = curator.curate(query)
+                for c in curated:
+                    results.append({
+                        "title": c.get("description", c.get("name", "")),
+                        "url": c.get("url", ""),
+                        "content": "",
+                        "source": "curated",
+                        "source_type": "industry",
+                        "relevance_score": 0.8
+                    })
             results = results[:max_results]
-            
-            logger.info(f"Found {len(results)} search results from {len(search_sources)} sources")
+            # 写入缓存
+            self._cache[query] = results
+            logger.info(f"Found {len(results)} search results")
             return results
             
         except Exception as e:
@@ -285,6 +447,44 @@ class WebSearchTool:
             except:
                 # 如果后备也失败，返回空结果
                 return []
+
+    def _augment_query_for_type(self, query: str, qtype: str) -> str:
+        q = query
+        if qtype == "academic":
+            q = f"{q} site:arxiv.org OR site:springer.com OR site:ieeexplore.ieee.org"
+        elif qtype == "technical":
+            q = f"{q} site:github.com OR site:stackoverflow.com OR site:developer.mozilla.org"
+        elif qtype == "industry":
+            q = f"{q} site:mdpi.com OR site:sciencedirect.com OR site:link.springer.com"
+        return q
+
+    def _is_content_url(self, url: str) -> bool:
+        if not url:
+            return False
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.netloc.lower()
+            path = parsed.path.lower()
+            # 显式排除常见搜索页
+            if host.endswith("wikipedia.org") and "special:search" in path:
+                return False
+            if any(h in host for h in ["sciencedirect.com", "springer.com", "mdpi.com"]) and "/search" in path:
+                return False
+            if host.endswith("ieeexplore.ieee.org") and "/search" in path:
+                return False
+            if any(s in host for s in ["bing.com", "baidu.com", "sogou.com", "google.com"]):
+                return False
+            if "/search" in path or "search?" in parsed.query:
+                return False
+            if host.endswith("wikipedia.org") and "/wiki/" in path and "special:search" not in path:
+                return True
+            if host.endswith("arxiv.org") and ("/abs/" in path or "/pdf/" in path):
+                return True
+            if any(h in host for h in ["sciencedirect.com", "springer.com", "mdpi.com", "ieeexplore.ieee.org"]):
+                return "/article" in path or "/chapter" in path or "/paper" in path or "/content" in path
+            return True
+        except Exception:
+            return True
     
     async def _get_source_results(self, query: str, source: Dict[str, Any], max_results: int) -> List[Dict[str, Any]]:
         """
@@ -293,7 +493,12 @@ class WebSearchTool:
         """
         try:
             source_name = source.get('name', 'unknown')
-            source_url = source.get('url', '').format(query=urllib.parse.quote(query))
+            base_query = query
+            raw_url = source.get('url', '')
+            if '{query}' in raw_url:
+                source_url = raw_url.format(query=urllib.parse.quote(base_query))
+            else:
+                source_url = raw_url
             logger.info(f"Getting results from source '{source_name}': {source_url[:100]}...")
             
             # 为不同来源生成相应的模拟搜索结果
@@ -325,9 +530,21 @@ class WebSearchTool:
                 if source_name == "wikipedia":
                     mock_url = f"https://zh.wikipedia.org/wiki/Special:Search?search={urllib.parse.quote(query)}"
                 elif source_name == "github":
-                    mock_url = f"https://github.com/topics/{query.lower().replace(' ', '-')}"
+                    slug = query.lower().replace(' ', '-')
+                    if 'langchain' in query.lower():
+                        mock_url = "https://github.com/langchain-ai/langchain"
+                    else:
+                        mock_url = f"https://github.com/topics/{slug}"
                 elif source_name == "stackoverflow":
                     mock_url = f"https://stackoverflow.com/questions/tagged/{query.lower().replace(' ', '-')}"
+                elif source_name == "langchain_docs":
+                    mock_url = "https://python.langchain.com/docs/"
+                    title = "LangChain 官方文档"
+                    content = "LangChain 核心模块、RAG、Agents、Memory、工具接入与最佳实践"
+                elif source_name == "langchain_github":
+                    mock_url = "https://github.com/langchain-ai/langchain"
+                    title = "LangChain GitHub 仓库"
+                    content = "LangChain 框架源码、示例与版本发布说明"
                 elif source_name == "zhihu":
                     mock_url = f"https://www.zhihu.com/search?q={urllib.parse.quote(query)}"
                 else:
@@ -581,3 +798,12 @@ class ResearchTool:
             "research_data": research_data,
             "conducted_at": asyncio.get_event_loop().time()
         }
+try:
+    import wikipedia
+    wikipedia.set_lang('zh')
+except Exception:
+    wikipedia = None
+try:
+    import arxiv
+except Exception:
+    arxiv = None

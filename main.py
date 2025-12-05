@@ -28,6 +28,7 @@ from config import (
 from src.api.api_router import api_router
 from src.agents.research_agent import ResearchAgent
 from src.memory.memory_manager import MemoryManager
+from src.memory.learning_manager import LearningManager
 from src.generation.report_generator import ReportGenerator
 
 # Configure logging
@@ -72,6 +73,9 @@ async def startup_event():
     # Initialize memory manager
     global memory_manager
     memory_manager = MemoryManager()
+    global learning_manager
+    from config import CHROMA_PERSIST_DIR
+    learning_manager = LearningManager(CHROMA_PERSIST_DIR)
     
     # Initialize report generator
     global report_generator
@@ -81,7 +85,8 @@ async def startup_event():
     global research_agent
     research_agent = ResearchAgent(
         memory_manager=memory_manager,
-        report_generator=report_generator
+        report_generator=report_generator,
+        learning_manager=learning_manager,
     )
     
     logger.info("System components initialized successfully")

@@ -4,6 +4,32 @@ Based on the system architecture design document
 """
 import os
 from typing import Optional
+from pathlib import Path
+
+def _load_env_files():
+    paths = [Path('.env'), Path('.env.local')]
+    for p in paths:
+        if p.exists():
+            try:
+                with p.open('r', encoding='utf-8') as f:
+                    for line in f:
+                        s = line.strip()
+                        if not s or s.startswith('#'):
+                            continue
+                        if '=' not in s:
+                            continue
+                        k, v = s.split('=', 1)
+                        k = k.strip()
+                        v = v.strip().strip('"\'`')
+                        # 支持内联注释，去除 # 之后内容
+                        if '#' in v:
+                            v = v.split('#', 1)[0].strip()
+                        if k and v and k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass
+
+_load_env_files()
 
 # LLM Provider Configuration
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "doubao").lower()  # Options: openai, doubao
@@ -55,6 +81,8 @@ MAX_TOOL_CALLS_PER_STEP = int(os.getenv("MAX_TOOL_CALLS_PER_STEP", "10"))
 BROWSER_TOOL_ENABLED = os.getenv("BROWSER_TOOL_ENABLED", "True").lower() == "true"
 CODE_EXECUTION_ENABLED = os.getenv("CODE_EXECUTION_ENABLED", "True").lower() == "true"
 MAX_SEARCH_RESULTS = int(os.getenv("MAX_SEARCH_RESULTS", "10"))
+SEARCH_DISABLE_DDG = os.getenv("SEARCH_DISABLE_DDG", "True").lower() == "true"
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 # Report Generation Configuration
 REPORT_TEMPLATE_PATH = os.getenv("REPORT_TEMPLATE_PATH", "./templates")

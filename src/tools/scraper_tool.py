@@ -30,6 +30,8 @@ class ScraperTool:
     def __init__(self):
         logger.info("Web Scraper Tool initialized")
         self.timeout = aiohttp.ClientTimeout(total=30)
+        self._do_not_scrape_domains = {"www.sciencedirect.com", "sciencedirect.com", "www.mdpi.com", "mdpi.com"}
+        self._min_delay = 0.6
     
     def _get_random_user_agent(self) -> str:
         """返回随机的User-Agent以避免被识别为爬虫"""
@@ -72,12 +74,11 @@ class ScraperTool:
                 except Exception:
                     pass
                 
+                # 轻微延迟，减少触发速率限制
+                await asyncio.sleep(self._min_delay)
                 async with session.get(url, headers=headers) as response:
                     # 根据不同状态码提供更详细的错误信息
-                    if response.status == 200:
-                        # 成功获取内容
-                        pass
-                    elif response.status == 403:
+                    if response.status == 403:
                         logger.warning(f"Access forbidden (403) when fetching URL: {url}. Possible reasons: IP blocked, missing permissions, or User-Agent rejected")
                         try:
                             fallback = f"https://www.bing.com/search?q={urllib.parse.quote(url)}"
@@ -149,8 +150,8 @@ class ScraperTool:
                             'content': None,
                             'status_code': response.status
                         }
-                    else:
-                        # 其他状态码
+                    elif response.status != 200:
+                        # 其他非成功状态码
                         logger.error(f"Failed to fetch URL: {url}, status code: {response.status}")
                         return {
                             'url': url,
@@ -177,7 +178,7 @@ class ScraperTool:
                         # 使用默认方法获取内容
                         html_content = await response.text()
                     
-                    # 使用BeautifulSoup解析HTML
+                    # 使用BeautifulSoup解析HTML（200 成功时继续）
                     soup = BeautifulSoup(html_content, 'html.parser')
                     
                     # 提取标题
@@ -257,7 +258,20 @@ class ScraperTool:
             return result.get('content', '')
         else:
             logger.error(f"Failed to scrape URL with scrape_url: {clean_url}, error: {result.get('error')}")
-            return f"Error scraping content: {result.get('error')}"
+            return f"Error scraping content: {result.get('error')}" 
+
+    def should_scrape(self, url: str) -> bool:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.netloc.lower()
+            path = parsed.path.lower()
+            if host in self._do_not_scrape_domains:
+                return False
+            if '/search' in path:
+                return False
+            return True
+        except Exception:
+            return True
     
     async def scrape_multiple(self, urls: list, delay: float = 1.0, retry_on_error: bool = True, max_retries: int = 2) -> list:
         """

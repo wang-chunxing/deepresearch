@@ -18,12 +18,45 @@
 
 {{ analysis }}
 
+{% if outline %}
+## Research Outline
+{% for d in outline %}
+- {{ d.title }} | Keywords: {{ d.keywords|join(', ') }} | Path: {{ d.path|join(', ') }}
+{% endfor %}
+{% endif %}
+
+{% if retrieval_path %}
+## Retrieval Path & Decisions
+{% for phase in retrieval_path %}
+- Phase: {{ phase.phase }}
+{% for t in phase.trace %}
+  - Topic: {{ t.topic }} | Query: {{ t.query }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if knowledge_graph_mermaid %}
+## Knowledge Graph
+
+```mermaid
+{{ knowledge_graph_mermaid }}
+```
+{% endif %}
+
 {% if sources and include_sources %}
 ## Sources
 
 {% for source in sources %}
 1. [{{ source.title }}]({{ source.url }}) - {{ source.summary[:100] }}...
 {% endfor %}
+{% if credibility_matrix %}
+### Source Credibility Matrix
+
+| Title | Domain | Peer Review | Timeliness | Relevance |
+|---|---|---|---|---|
+{% for row in credibility_matrix %}
+| {{ row.title[:20] }} | {{ row.domain }} | {{ row.peer_review }} | {{ row.timeliness }} | {{ '%.2f'|format(row.relevance) }} |
+{% endfor %}
+{% endif %}
 {% endif %}
 
 {% if contradictions %}
@@ -40,6 +73,32 @@
 {% for gap in gaps %}
 - {{ gap }}
 {% endfor %}
+{% endif %}
+
+{% if methodology %}
+## Methodology
+
+### Strategy Steps
+{% for s in methodology.strategy %}
+- {{ s }}
+{% endfor %}
+
+### Parameter Inference
+```
+{{ methodology.inference }}
+```
+
+### Iterations
+{{ methodology.iterations }}
+{% endif %}
+
+{% if evaluation_metrics %}
+## Evaluation Metrics
+
+- Coverage Iterations: {{ evaluation_metrics.coverage_iterations }}
+- Source Diversity: {{ evaluation_metrics.source_diversity }}
+- Closure: {{ '%.2f'|format(evaluation_metrics.closure) }}
+- Quality Warning: {{ evaluation_metrics.quality_warning }}
 {% endif %}
 
 ---

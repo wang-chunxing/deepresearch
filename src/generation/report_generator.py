@@ -189,29 +189,97 @@ class ReportGenerator:
         validated_findings = research_result.get("validated_findings", {})
         gathered_info = research_result.get("gathered_information", {})
         
-        # Prepare report data
-        report_data = {
-            "title": f"Research Report: {query}",
+        def build_mermaid(data: Dict[str, Any]) -> str:
+            nodes = []
+            edges = []
+            q = data.get("query", "")
+            nodes.append(f"Q[Query:{q[:20]}]")
+            for t in data.get("analysis", {}).get("themes", []):
+                nid = f"T{abs(hash(t))%10000}"
+                nodes.append(f"{nid}[{t[:20]}]")
+                edges.append(f"Q-->${nid}")
+            for s in data.get("sources", [])[:10]:
+                sid = f"S{abs(hash(s.get('url','')))%10000}"
+                title = s.get("title", "")[:20]
+                nodes.append(f"{sid}({title})")
+                edges.append(f"Q-->${sid}")
+            return "graph TD\n" + "\n".join(nodes + edges)
+
+        def build_credibility_matrix(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            rows = []
+            for s in sources[:20]:
+                url = s.get("url", "")
+                domain = url.split("/")[2] if url and "/" in url else ""
+                peer_review = 1 if any(x in url for x in ["journal", "doi", ".edu", ".gov", ".org"]) else 0
+                timeliness = 1
+                rows.append({"title": s.get("title", ""), "domain": domain, "peer_review": peer_review, "timeliness": timeliness, "relevance": s.get("relevance_score", 0.0)})
+            return rows
+
+        def score_quality(data: Dict[str, Any]) -> Dict[str, Any]:
+            q = data.get("query", "")
+            sources = data.get("sources", [])
+            findings = data.get("key_findings", [])
+            recs = data.get("recommendations", [])
+            rel_hits = 0
+            for f in findings:
+                if q and str(q)[:20] in str(f):
+                    rel_hits += 1
+            rel_sources = 0
+            for s in sources:
+                t = s.get("title", "")
+                if q and (str(q)[:12] in t or t):
+                    rel_sources += 1
+            relevance = min(1.0, (rel_hits + rel_sources) / max(1, len(findings) + len(sources)))
+            depth = min(1.0, (len(set([s.get("domain", "") for s in sources])) / 8.0) + (len(findings) / 10.0))
+            feasibility = min(1.0, len([r for r in recs if len(str(r)) > 10]) / 5.0)
+            professionalism = 0.8 if len(str(data.get("analysis", ""))) > 200 else 0.6
+            passed = relevance >= 0.6 and depth >= 0.6 and feasibility >= 0.6 and professionalism >= 0.6
+            return {"relevance": round(relevance, 2), "depth": round(depth, 2), "feasibility": round(feasibility, 2), "professionalism": round(professionalism, 2), "passed": passed}
+
+        def compose_recommendations(data: Dict[str, Any]) -> List[str]:
+            recs: List[str] = []
+            if data.get("gaps"):
+                recs.append("补充数据与证据收集计划")
+            if data.get("contradictions"):
+                recs.append("开展事实核查与来源交叉验证")
+            metrics = data.get("evaluation_metrics", {})
+            if metrics.get("source_diversity", 0) < 5:
+                recs.append("拓展来源类型并增加权威文献比例")
+            if metrics.get("coverage_iterations", 0) < 3:
+                recs.append("增加检索迭代轮次并优化关键词策略")
+            if not recs:
+                recs.append("推进验证性试点并建立滚动评估机制")
+            return recs
+
+        dynamic = {
+            "title": f"研究报告: {query}",
             "query": query,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "summary": analysis.get("summary", "No summary available"),
-            "key_findings": analysis.get("key_findings", []),
-            "analysis": analysis.get("summary", "No analysis available"),
+            "analysis": research_result.get("module", {}).get("conclusions") or analysis.get("summary", ""),
+            "key_findings": research_result.get("module", {}).get("findings") or analysis.get("key_findings", []),
             "sources": gathered_info.get("sources", []),
             "contradictions": analysis.get("contradictions", []),
             "gaps": analysis.get("gaps", []),
             "confidence_level": validated_findings.get("confidence_level", 0.0),
-            "include_sources": include_sources
+            "outline": research_result.get("outline", []),
+            "retrieval_path": research_result.get("retrieval_path", []),
+            "events": research_result.get("events", []),
+            "evaluation_metrics": research_result.get("evaluation_metrics", {}),
+            "fact_check": research_result.get("fact_check", {}),
         }
-        
-        # Generate report based on format
+        dynamic["knowledge_graph_mermaid"] = build_mermaid({"query": query, "analysis": analysis, "sources": dynamic.get("sources", [])})
+        dynamic["credibility_matrix"] = build_credibility_matrix(dynamic.get("sources", []))
+        dynamic["recommendations"] = research_result.get("module", {}).get("recommendations") or compose_recommendations(dynamic)
+        dynamic["evidence"] = research_result.get("module", {}).get("evidence", [])
+        quality = score_quality(dynamic)
+        dynamic["quality"] = quality
         if format_type.lower() == "html":
-            report = await self._generate_html_report(report_data)
-        elif format_type.lower() == "markdown":
-            report = await self._generate_markdown_report(report_data)
+            md = await self._compose_dynamic_markdown(dynamic, include_sources)
+            html = self._markdown_to_html(md)
+            return html
         else:
-            # Default to markdown
-            report = await self._generate_markdown_report(report_data)
+            md = await self._compose_dynamic_markdown(dynamic, include_sources)
+            return md
         
         logger.info(f"Report generated successfully in {format_type} format")
         return report
@@ -253,12 +321,33 @@ class ReportGenerator:
         
         report += "## 分析\n\n"
         report += f"{report_data['analysis']}\n\n"
+        if report_data.get('knowledge_graph_mermaid'):
+            report += "## 知识图谱\n\n"
+            report += "```mermaid\n" + report_data['knowledge_graph_mermaid'] + "\n```\n\n"
         
+        if report_data['outline']:
+            report += "## 研究大纲\n\n"
+            for d in report_data['outline']:
+                report += f"- {d.get('title','')} | 关键词: {', '.join(d.get('keywords', []))} | 路径: {', '.join(d.get('path', []))}\n"
+            report += "\n"
+        if report_data['retrieval_path']:
+            report += "## 检索路径与决策\n\n"
+            for phase in report_data['retrieval_path']:
+                report += f"- 阶段: {phase.get('phase')}\n"
+                for t in phase.get('trace', []):
+                    report += f"  - 主题: {t.get('topic')} | 查询: {t.get('query')}\n"
+            report += "\n"
         if report_data['sources'] and report_data['include_sources']:
             report += "## 来源\n\n"
             for i, source in enumerate(report_data['sources'], 1):
                 report += f"{i}. [{source['title']}]({source['url']}) - {source['summary'][:100]}...\n"
             report += "\n"
+            if report_data.get('credibility_matrix'):
+                report += "### 来源可信度矩阵\n\n"
+                report += "| 标题 | 域名 | 同行评审 | 时效性 | 相关性 |\n|---|---|---|---|---|\n"
+                for row in report_data['credibility_matrix']:
+                    report += f"| {row['title'][:20]} | {row['domain']} | {row['peer_review']} | {row['timeliness']} | {row['relevance']:.2f} |\n"
+                report += "\n"
         
         if report_data['contradictions']:
             report += "## 识别的矛盾\n\n"
@@ -270,6 +359,27 @@ class ReportGenerator:
             report += "## 信息空白\n\n"
             for gap in report_data['gaps']:
                 report += f"- {gap}\n"
+            report += "\n"
+        if report_data.get('methodology'):
+            report += "## 研究方法学\n\n"
+            report += "### 策略步骤\n\n"
+            for s in report_data['methodology'].get('strategy', []):
+                report += f"- {s}\n"
+            report += "\n### 参数推断\n\n"
+            report += f"{report_data['methodology'].get('inference', {})}\n\n"
+            report += "### 迭代次数\n\n"
+            report += f"{report_data['methodology'].get('iterations', 0)}\n\n"
+        if report_data.get('evaluation_metrics'):
+            m = report_data['evaluation_metrics']
+            report += "## 评估指标\n\n"
+            report += f"覆盖迭代: {m.get('coverage_iterations', 0)}\n\n"
+            report += f"来源多样性: {m.get('source_diversity', 0)}\n\n"
+            report += f"闭合度: {m.get('closure', 0):.2f}\n\n"
+            report += f"质量预警: {m.get('quality_warning', False)}\n\n"
+        if report_data.get('events'):
+            report += "## 论证链追溯\n\n"
+            for e in report_data['events'][:20]:
+                report += f"- {e.get('event_id','')} {e.get('node','')}\n"
             report += "\n"
         
         report += "---\n"
@@ -299,12 +409,21 @@ class ReportGenerator:
         
         report += "<h2>分析</h2>\n"
         report += f"<p>{report_data['analysis']}</p>\n"
+        if report_data.get('knowledge_graph_mermaid'):
+            report += "<h2>知识图谱</h2>\n<pre>"
+            report += report_data['knowledge_graph_mermaid']
+            report += "</pre>\n"
         
         if report_data['sources'] and report_data['include_sources']:
             report += "<h2>来源</h2>\n<ul>\n"
             for source in report_data['sources']:
                 report += f"<li><a href='{source['url']}' target='_blank'>{source['title']}</a> - {source['summary'][:100]}...</li>\n"
             report += "</ul>\n"
+            if report_data.get('credibility_matrix'):
+                report += "<h3>来源可信度矩阵</h3>\n<table border='1' cellpadding='6'><tr><th>标题</th><th>域名</th><th>同行评审</th><th>时效性</th><th>相关性</th></tr>"
+                for row in report_data['credibility_matrix']:
+                    report += f"<tr><td>{row['title'][:20]}</td><td>{row['domain']}</td><td>{row['peer_review']}</td><td>{row['timeliness']}</td><td>{row['relevance']:.2f}</td></tr>"
+                report += "</table>\n"
         
         if report_data['contradictions']:
             report += "<h2>识别的矛盾</h2>\n<ul>\n"
@@ -317,6 +436,30 @@ class ReportGenerator:
             for gap in report_data['gaps']:
                 report += f"<li>{gap}</li>\n"
             report += "</ul>\n"
+        if report_data.get('methodology'):
+            report += "<h2>研究方法学</h2>\n"
+            report += "<h3>策略步骤</h3><ul>"
+            for s in report_data['methodology'].get('strategy', []):
+                report += f"<li>{s}</li>"
+            report += "</ul>"
+            report += "<h3>参数推断</h3><pre>"
+            report += str(report_data['methodology'].get('inference', {}))
+            report += "</pre>"
+            report += "<h3>迭代次数</h3><p>"
+            report += str(report_data['methodology'].get('iterations', 0))
+            report += "</p>"
+        if report_data.get('evaluation_metrics'):
+            m = report_data['evaluation_metrics']
+            report += "<h2>评估指标</h2>\n"
+            report += f"<p>覆盖迭代: {m.get('coverage_iterations', 0)}</p>"
+            report += f"<p>来源多样性: {m.get('source_diversity', 0)}</p>"
+            report += f"<p>闭合度: {m.get('closure', 0):.2f}</p>"
+            report += f"<p>质量预警: {m.get('quality_warning', False)}</p>"
+        if report_data.get('events'):
+            report += "<h2>论证链追溯</h2><ul>"
+            for e in report_data['events'][:20]:
+                report += f"<li>{e.get('event_id','')} {e.get('node','')}</li>"
+            report += "</ul>"
         
         report += "<hr>\n"
         report += "<p><em>由深度研究报告生成代理系统生成</em></p>\n"
@@ -363,3 +506,123 @@ class ReportGenerator:
         
         template = Template(template_content)
         return template.render(**summary_data)
+
+    async def _compose_dynamic_markdown(self, data: Dict[str, Any], include_sources: bool) -> str:
+        lines = []
+        lines.append(f"# {data['title']}")
+        lines.append("")
+        lines.append(f"**研究查询:** {data['query']}")
+        lines.append(f"**生成时间:** {data['timestamp']}")
+        lines.append(f"**置信度:** {data.get('confidence_level', 0.0)}")
+        lines.append("")
+        focus = []
+        for d in data.get("outline", [])[:5]:
+            focus.append(f"- {d.get('title','')} | 关键词: {', '.join(d.get('keywords', []))}")
+        if focus and not data.get("module", {}).get("final_article"):
+            lines.append("## 研究焦点与范围")
+            lines.extend(focus)
+            lines.append("")
+        final_article = data.get("module", {}).get("final_article") if data.get("module") else None
+        article = data.get("module", {}).get("article") if data.get("module") else None
+        if final_article:
+            lines.append("## 正文")
+            lines.append(final_article)
+            lines.append("")
+        elif article:
+            lines.append("## 正文")
+            lines.append(article)
+            lines.append("")
+        else:
+            # 无正文时回退到框架化输出
+            lines.append("## 数据驱动的问题发现")
+            fobjs = data.get("module", {}).get("findings") if data.get("module") else None
+            if fobjs:
+                for f in fobjs[:10]:
+                    ev = f.get("evidence_ids", [])
+                    tag = f" [{' + '.join(str(x) for x in ev)}]" if ev else ""
+                    lines.append(f"- {f.get('text','')}" + tag)
+            else:
+                for f in data.get("key_findings", [])[:10]:
+                    lines.append(f"- {f}")
+            if not data.get("key_findings"):
+                lines.append("- 未识别到明确问题，需要补充检索与数据整合")
+            lines.append("")
+            lines.append("## 分析结论")
+            cobjs = data.get("module", {}).get("conclusions") if data.get("module") else None
+            if cobjs:
+                for c in cobjs[:10]:
+                    ev = c.get("evidence_ids", [])
+                    tag = f" [{' + '.join(str(x) for x in ev)}]" if ev else ""
+                    lines.append(f"- {c.get('text','')}" + tag)
+            else:
+                lines.append(str(data.get("analysis", "")))
+            lines.append("")
+            lines.append("## 建议方案")
+            robjs = data.get("module", {}).get("recommendations") if data.get("module") else None
+            if robjs:
+                for r in robjs[:6]:
+                    reason = r.get("reason")
+                    lines.append(f"- {r.get('text','')}" + (f"（依据：{reason}）" if reason else ""))
+            else:
+                for r in data.get("recommendations", [])[:6]:
+                    lines.append(f"- {r}")
+            lines.append("")
+        if data.get("evidence"):
+            lines.append("## 证据映射")
+            for ev in data.get("evidence", [])[:20]:
+                lines.append(f"- [{ev.get('id')}] {ev.get('title')} — {ev.get('url')}")
+            lines.append("")
+        if data.get("knowledge_graph_mermaid") and not data.get("module", {}).get("final_article"):
+            lines.append("## 知识图谱")
+            lines.append("```mermaid")
+            lines.append(str(data.get("knowledge_graph_mermaid")))
+            lines.append("```")
+            lines.append("")
+        if include_sources and data.get("sources"):
+            lines.append("## 来源")
+            for i, s in enumerate(data.get("sources", [])[:30], 1):
+                lines.append(f"{i}. [{s.get('title','')}]({s.get('url','')}) - {str(s.get('summary',''))[:100]}...")
+            if data.get("credibility_matrix"):
+                lines.append("")
+                lines.append("### 来源可信度矩阵")
+                lines.append("| 标题 | 域名 | 同行评审 | 时效性 | 相关性 |")
+                lines.append("|---|---|---|---|---|")
+                for row in data.get("credibility_matrix", [])[:20]:
+                    lines.append(f"| {row['title'][:20]} | {row['domain']} | {row['peer_review']} | {row['timeliness']} | {row['relevance']:.2f} |")
+            lines.append("")
+        if data.get("retrieval_path") and not data.get("module", {}).get("final_article"):
+            lines.append("## 检索路径与决策")
+            for phase in data.get("retrieval_path", []):
+                lines.append(f"- 阶段: {phase.get('phase')}")
+                for t in phase.get("trace", []):
+                    lines.append(f"  - 主题: {t.get('topic')} | 查询: {t.get('query')}")
+            lines.append("")
+        if data.get("quality") and not data.get("module", {}).get("final_article"):
+            q = data.get("quality")
+            lines.append("## 质量评估")
+            lines.append(f"- 内容相关性: {q.get('relevance')}")
+            lines.append(f"- 分析深度: {q.get('depth')}\n- 建议可行性: {q.get('feasibility')}\n- 语言专业性: {q.get('professionalism')}")
+            lines.append(f"- 综合判定: {'通过' if q.get('passed') else '需要改进'}")
+            lines.append("")
+        if data.get("events") and not data.get("module", {}).get("final_article"):
+            lines.append("## 论证链追溯")
+            for e in data.get("events", [])[:20]:
+                lines.append(f"- {e.get('event_id','')} {e.get('node','')}")
+            lines.append("")
+        lines.append("---")
+        lines.append("*由深度研究报告生成代理系统生成*")
+        return "\n".join(lines)
+
+    def _markdown_to_html(self, md: str) -> str:
+        html = md
+        html = html.replace("\n\n", "</p><p>")
+        html = html.replace("# ", "<h2>").replace("\n", "</h2>\n") if md.startswith("# ") else html
+        return f"<html><body><p>{html}</p></body></html>"
+        if data.get("fact_check"):
+            fc = data.get("fact_check")
+            lines.append("## 事实核查")
+            lines.append(f"- 状态: {fc.get('status')}")
+            lines.append(f"- 评分: {fc.get('score')}")
+            for d in fc.get("details", [])[:6]:
+                lines.append(f"- 断言: {d.get('claim','')} | 支持: {d.get('supported')} | 参考: {', '.join([c.get('url','') for c in d.get('citations', [])[:3]])}")
+            lines.append("")

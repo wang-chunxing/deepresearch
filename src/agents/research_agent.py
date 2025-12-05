@@ -5,10 +5,15 @@ Implements the reasoning layer based on multi-agent collaboration and dynamic pl
 import asyncio
 import logging
 import requests
+import os
+import random
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 
-from langchain_openai import ChatOpenAI
+try:
+    from langchain_openai import ChatOpenAI
+except Exception:
+    ChatOpenAI = None
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import Runnable
@@ -29,141 +34,12 @@ from src.memory.memory_manager import MemoryManager
 from src.generation.report_generator import ReportGenerator
 from src.tools.web_search_tool import WebSearchTool
 from src.tools.scraper_tool import ScraperTool
+from src.tools.fact_check_tool import FactCheckTool
 
 logger = logging.getLogger(__name__)
 
 
-class DoubaoLLM:
-    """
-    豆包LLM客户端，实现与豆包API的交互
-    """
-    
-    def __init__(self, api_key, model, api_endpoint, max_tokens, reasoning_effort, temperature):
-        self.api_key = api_key
-        self.model = model
-        self.api_endpoint = api_endpoint
-        self.max_tokens = max_tokens
-        self.reasoning_effort = reasoning_effort
-        self.temperature = temperature
-        
-    def _convert_messages_to_doubao_format(self, messages):
-        """将LangChain消息格式转换为豆包API所需格式"""
-        doubao_messages = []
-        for message in messages:
-            # 处理HumanMessage
-            if isinstance(message, HumanMessage):
-                content = []
-                # 检查是否为纯文本消息
-                if hasattr(message, 'content') and isinstance(message.content, str):
-                    content.append({
-                        "text": message.content,
-                        "type": "text"
-                    })
-                # 处理图像内容（如果有）
-                elif hasattr(message, 'content') and isinstance(message.content, list):
-                    content = message.content
-                
-                doubao_messages.append({
-                    "role": "user",
-                    "content": content
-                })
-            # 处理SystemMessage
-            elif isinstance(message, SystemMessage):
-                doubao_messages.append({
-                    "role": "system",
-                    "content": [{
-                        "text": message.content,
-                        "type": "text"
-                    }]
-                })
-            # 处理AIMessage
-            elif isinstance(message, AIMessage):
-                doubao_messages.append({
-                    "role": "assistant",
-                    "content": [{
-                        "text": message.content if hasattr(message, 'content') else str(message),
-                        "type": "text"
-                    }]
-                })
-        return doubao_messages
-    
-    async def ainvoke(self, messages):
-        """
-        异步调用豆包API，包含重试机制
-        """
-        # 转换消息格式
-        doubao_messages = self._convert_messages_to_doubao_format(messages)
-        
-        # 构建请求体
-        payload = {
-            "model": self.model,
-            "max_completion_tokens": self.max_tokens,
-            "messages": doubao_messages,
-            "reasoning_effort": self.reasoning_effort,
-            "temperature": self.temperature
-        }
-        
-        # 设置请求头
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        
-        # 配置重试参数
-        max_retries = 3
-        retry_delay = 2  # 初始延迟时间（秒）
-        
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"豆包API调用尝试 #{attempt+1}/{max_retries} 到 {self.api_endpoint}")
-                
-                # 发送请求，优化超时设置
-                response = requests.post(
-                    self.api_endpoint,
-                    json=payload,
-                    headers=headers,
-                    timeout=(10, 90)  # (连接超时, 读取超时)
-                )
-                
-                # 检查响应状态
-                response.raise_for_status()
-                
-                # 解析响应
-                result = response.json()
-                
-                # 提取内容
-                if "choices" in result and result["choices"]:
-                    content = result["choices"][0]["message"]["content"]
-                    logger.info(f"豆包API调用成功，返回内容长度: {len(content)} 字符")
-                    # 创建一个类似AIMessage的对象返回
-                    return type('obj', (object,), {"content": content})
-                else:
-                    error_msg = f"豆包API返回无效响应: {result}"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-                    
-            except requests.exceptions.Timeout as e:
-                error_msg = f"豆包API请求超时: {str(e)}"
-                logger.warning(f"{error_msg} (尝试 {attempt+1}/{max_retries})")
-                
-                # 如果是最后一次尝试，则抛出异常
-                if attempt == max_retries - 1:
-                    logger.error(f"豆包API请求在{max_retries}次尝试后全部超时")
-                    raise
-                
-                # 指数退避延迟
-                delay = retry_delay * (2 ** attempt)
-                logger.info(f"{delay:.2f}秒后重试...")
-                await asyncio.sleep(delay)
-                
-            except requests.exceptions.RequestException as e:
-                error_msg = f"豆包API请求失败: {str(e)}"
-                logger.error(error_msg)
-                raise
-            except Exception as e:
-                error_msg = f"豆包API调用出错: {str(e)}"
-                logger.error(error_msg)
-                raise
+from src.llm.doubao import DoubaoLLM
 
 
 class ResearchAgent:
@@ -172,37 +48,54 @@ class ResearchAgent:
     基于多代理协作实现推理层
     """
     
-    def __init__(self, memory_manager: MemoryManager, report_generator: ReportGenerator):
+    def __init__(self, memory_manager: MemoryManager, report_generator: ReportGenerator, learning_manager=None):
         # 初始化内存管理器和报告生成器
         self.memory_manager = memory_manager
         self.report_generator = report_generator
+        self.learning_manager = learning_manager
         
         # 根据配置选择并初始化大语言模型
         if LLM_PROVIDER == "doubao":
             if not ARK_API_KEY:
-                raise ValueError("使用豆包模型时，必须设置ARK_API_KEY环境变量")
-            
-            logger.info(f"初始化豆包LLM: {DOUBAO_MODEL}")
-            self.llm = DoubaoLLM(
-                api_key=ARK_API_KEY,
-                model=DOUBAO_MODEL,
-                api_endpoint=DOUBAO_API_ENDPOINT,
-                max_tokens=DOUBAO_MAX_COMPLETION_TOKENS,
-                reasoning_effort=DOUBAO_REASONING_EFFORT,
-                temperature=DOUBAO_TEMPERATURE
-            )
+                logger.warning("ARK_API_KEY 未设置，使用测试LLM占位符")
+                class _DummyLLM:
+                    async def ainvoke(self, messages):
+                        return AIMessage(content="")
+                self.llm = _DummyLLM()
+                self._use_openai_pipeline = False
+            else:
+                logger.info(f"初始化豆包LLM: {DOUBAO_MODEL}")
+                self.llm = DoubaoLLM(
+                    api_key=ARK_API_KEY,
+                    model=DOUBAO_MODEL,
+                    api_endpoint=DOUBAO_API_ENDPOINT,
+                    max_tokens=DOUBAO_MAX_COMPLETION_TOKENS,
+                    reasoning_effort=DOUBAO_REASONING_EFFORT,
+                    temperature=DOUBAO_TEMPERATURE
+                )
+                self._use_openai_pipeline = False
         else:
             # 默认使用OpenAI
-            logger.info(f"初始化OpenAI LLM: {OPENAI_BASE_MODEL}")
-            self.llm = ChatOpenAI(
-                model_name=OPENAI_BASE_MODEL,
-                temperature=OPENAI_TEMPERATURE,
-                max_tokens=OPENAI_MAX_TOKENS
-            )
+            if ChatOpenAI is None or not os.getenv("OPENAI_API_KEY", ""):
+                logger.warning("OPENAI_API_KEY 未设置，使用测试LLM占位符")
+                class _DummyLLM:
+                    async def ainvoke(self, messages):
+                        return AIMessage(content="")
+                self.llm = _DummyLLM()
+                self._use_openai_pipeline = False
+            else:
+                logger.info(f"初始化OpenAI LLM: {OPENAI_BASE_MODEL}")
+                self.llm = ChatOpenAI(
+                    model_name=OPENAI_BASE_MODEL,
+                    temperature=OPENAI_TEMPERATURE,
+                    max_tokens=OPENAI_MAX_TOKENS
+                )
+                self._use_openai_pipeline = True
         
         # 初始化工具
         self.web_search_tool = WebSearchTool()
         self.scraper_tool = ScraperTool()
+        self.fact_check_tool = FactCheckTool()
         
         # 初始化专门代理（通过不同提示/角色模拟）
         self.planning_agent = self._create_planning_agent()
@@ -214,7 +107,7 @@ class ResearchAgent:
     
     def _create_planning_agent(self):
         """创建规划代理组件"""
-        if LLM_PROVIDER == "doubao":
+        if not getattr(self, "_use_openai_pipeline", False):
             # 对于豆包，直接使用自定义的提示处理·
             system_prompt = "You are a research planning specialist. Your role is to break down complex research queries into manageable steps and create a research plan."
             return type('obj', (object,), {
@@ -230,7 +123,7 @@ class ResearchAgent:
     
     def _create_research_agent(self):
         """创建研究代理组件"""
-        if LLM_PROVIDER == "doubao":
+        if not getattr(self, "_use_openai_pipeline", False):
             system_prompt = "You are a research specialist. Your role is to gather relevant information from various sources based on the research plan."
             return type('obj', (object,), {
                 'ainvoke': lambda messages: self._doubao_agent_invoke(system_prompt, messages)
@@ -244,7 +137,7 @@ class ResearchAgent:
     
     def _create_analysis_agent(self):
         """创建分析代理组件"""
-        if LLM_PROVIDER == "doubao":
+        if not getattr(self, "_use_openai_pipeline", False):
             system_prompt = "You are an analysis specialist. Your role is to synthesize gathered information, identify patterns, and draw insights."
             return type('obj', (object,), {
                 'ainvoke': lambda messages: self._doubao_agent_invoke(system_prompt, messages)
@@ -258,7 +151,7 @@ class ResearchAgent:
     
     def _create_validation_agent(self):
         """创建验证代理组件"""
-        if LLM_PROVIDER == "doubao":
+        if not getattr(self, "_use_openai_pipeline", False):
             system_prompt = "You are a validation specialist. Your role is to verify the accuracy and reliability of information and conclusions."
             return type('obj', (object,), {
                 'ainvoke': lambda messages: self._doubao_agent_invoke(system_prompt, messages)
@@ -327,6 +220,10 @@ class ResearchAgent:
     def _log_stage(self, stage: str, data: Dict[str, Any]):
         logger.info(f"[{datetime.now().isoformat()}] stage.{stage} {data}")
 
+    def _parse_input(self, query: str) -> Dict[str, Any]:
+        normalized = ' '.join(query.split())
+        return {"normalized_query": normalized, "entities": [], "relations": [], "dimensions": []}
+
     async def _decompose_intent(self, query: str) -> List[Dict[str, Any]]:
         base_topics = ["背景", "关键技术", "应用场景", "优劣分析", "发展趋势"]
         tasks = []
@@ -334,20 +231,42 @@ class ResearchAgent:
             tasks.append({"topic": t, "query": f"{query} {t}", "keywords": [query, t]})
         return tasks
 
-    async def _execute_subtasks(self, subtasks: List[Dict[str, Any]], max_sources: int) -> Dict[str, Any]:
+    async def _infer_parameters(self, parsed: Dict[str, Any], tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        q = parsed.get("normalized_query", "")
+        length = len(q)
+        if length < 40:
+            depth = "basic"
+            breadth = 5
+            iterations = 3
+        elif length < 120:
+            depth = "standard"
+            breadth = 6
+            iterations = 3
+        else:
+            depth = "comprehensive"
+            breadth = 8
+            iterations = 4
+        return {"strategy": {"breadth": breadth, "depth": 2 if depth != "basic" else 1, "iterations": iterations}, "analysis_depth": depth, "report_detail": "standard"}
+
+    async def _execute_subtasks(self, subtasks: List[Dict[str, Any]], max_sources: int, parallel: bool = False) -> Dict[str, Any]:
         sources: List[Dict[str, Any]] = []
         information: List[Dict[str, Any]] = []
-        for st in subtasks:
+        trace: List[Dict[str, Any]] = []
+        async def handle_subtask(st: Dict[str, Any]):
             q = st.get("query", "")
             self._log_stage("query_optimization", {"subtopic": st.get("topic"), "query": q})
             results = await self.web_search_tool.search(q, max_results=max_sources)
             self._log_stage("subtask_search", {"subtopic": st.get("topic"), "result_count": len(results)})
+            trace.append({"topic": st.get("topic"), "query": q, "sources": [r.get("url") for r in results]})
             for i, r in enumerate(results[:max_sources]):
                 src = {"title": r.get("title", ""), "url": r.get("url", ""), "summary": r.get("content", ""), "relevance_score": r.get("relevance_score", 0.0), "subtopic": st.get("topic")}
                 sources.append(src)
                 if src["url"]:
                     try:
-                        content = await self.scraper_tool.scrape_url(src["url"])
+                        if hasattr(self.scraper_tool, 'should_scrape') and not self.scraper_tool.should_scrape(src["url"]):
+                            content = src["summary"]
+                        else:
+                            content = await self.scraper_tool.scrape_url(src["url"])
                     except Exception:
                         content = src["summary"]
                 else:
@@ -359,7 +278,12 @@ class ResearchAgent:
             summary = joined[:800]
             self._log_stage("segmented_processing", {"subtopic": st.get("topic"), "segments": len(sub_infos), "summary_len": len(summary)})
             await self.memory_manager.add_to_scratchpad(summary, {"type": "subtopic_summary", "subtopic": st.get("topic")})
-        return {"sources": sources, "information": information, "executed_at": datetime.now().isoformat()}
+        if parallel:
+            await asyncio.gather(*(handle_subtask(st) for st in subtasks))
+        else:
+            for st in subtasks:
+                await handle_subtask(st)
+        return {"sources": sources, "information": information, "trace": trace, "executed_at": datetime.now().isoformat()}
     
     async def _plan_research(self, query: str, depth: str) -> Dict[str, Any]:
         """根据查询和深度要求规划研究方法"""
@@ -398,7 +322,82 @@ class ResearchAgent:
         await self.memory_manager.add_to_scratchpad(f"Research plan for '{query}': {str(steps)}", {"type": "research_plan"})
         
         return plan
-    
+
+    async def _initial_bfs_collect(self, parsed: Dict[str, Any], breadth: int) -> Dict[str, Any]:
+        base = parsed.get("normalized_query", "")
+        variants = self._generate_query_variants(base, [], breadth)
+        subtasks = [{"topic": v.get("topic"), "query": v.get("query"), "keywords": v.get("keywords", [])} for v in variants[:breadth]]
+        return await self._execute_subtasks(subtasks, max_sources=breadth, parallel=True)
+
+    def _analyze_gaps(self, initial_results: Dict[str, Any]) -> Dict[str, Any]:
+        infos = initial_results.get("information", [])
+        topics = list({i.get("subtopic") for i in infos if i.get("subtopic")})
+        domain_terms = ["供应链", "物流", "制造", "库存", "需求预测", "调度", "质量"]
+        seen_text = " ".join([i.get("content", "")[:2000] for i in infos])
+        missing = [t for t in ["数据", "方法", "案例", "评价", "行业报告", "论文"] if t not in topics or t not in seen_text]
+        conflicts = []
+        return {"topics": topics, "missing": missing, "conflicts": conflicts}
+
+    async def _targeted_followups(self, parsed: Dict[str, Any], gaps: Dict[str, Any], depth: int) -> Dict[str, Any]:
+        base = parsed.get("normalized_query", "")
+        targets = gaps.get("missing", [])[:max(1, depth)]
+        variants = self._generate_query_variants(base, targets, max(3, depth))
+        subtasks = [{"topic": v.get("topic"), "query": v.get("query"), "keywords": v.get("keywords", [])} for v in variants]
+        return await self._execute_subtasks(subtasks, max_sources=5, parallel=True)
+
+    def _collect_sources(self, initial_results: Dict[str, Any], followup_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        s = list(initial_results.get("sources", []))
+        for fr in followup_results:
+            s.extend(fr.get("sources", []))
+        for x in s:
+            url = x.get("url", "")
+            domain = url.split("/")[2] if url and "/" in url else ""
+            x["domain"] = domain
+        return s
+
+    def _generate_query_variants(self, base: str, targets: List[str], count: int) -> List[Dict[str, Any]]:
+        lw = self.learning_manager.get_synonym_weights() if self.learning_manager else {}
+        synonyms = self._domain_synonyms(base)
+        synonyms.sort(key=lambda s: lw.get(s, 0.0), reverse=True)
+        years = ["2024", "2025"]
+        academic_filters = ["site:arxiv.org", "site:sciencedirect.com", "site:mdpi.com", "site:springer.com"]
+        industry_terms = ["行业报告", "白皮书", "案例研究", "实践效果", "落地挑战", "前沿趋势"]
+        variants: List[Dict[str, Any]] = []
+        base_core = base
+        seeds = targets if targets else ["背景", "关键技术", "应用场景", "挑战", "趋势"]
+        for i, t in enumerate(seeds):
+            syn = random.choice(synonyms) if synonyms else "研究"
+            q = f"{base_core} {t} {syn}"
+            if i % 2 == 0:
+                q = f"{q} {random.choice(years)}"
+            if i % 3 == 0:
+                q = f"{q} {random.choice(academic_filters)}"
+            variants.append({"topic": t, "query": q, "keywords": [base_core, t]})
+        for f in industry_terms[:max(1, count - len(variants))]:
+            syn = random.choice(synonyms) if synonyms else "研究"
+            q = f"{base_core} {f} {syn}"
+            variants.append({"topic": f, "query": q, "keywords": [base_core, f]})
+        return variants[:count]
+
+    def _domain_synonyms(self, base: str) -> List[str]:
+        b = base.lower()
+        if any(k in b for k in ["供应链", "logistics", "制造", "manufacturing"]):
+            return ["供应链", "物流", "制造", "库存优化", "需求预测", "动态调度", "质量检测"]
+        if any(k in b for k in ["金融", "风控", "finance", "risk"]):
+            return ["金融风控", "信用评估", "反欺诈", "合规", "模型治理", "实证研究"]
+        return ["综述", "实践", "案例", "方法", "评估", "趋势"]
+
+    def _generate_outline(self, parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+        q = parsed.get("normalized_query", "")
+        directions = [
+            {"title": "背景与问题界定", "keywords": [q, "背景", "现状"], "path": ["权威百科", "行业概览", "政策文件"]},
+            {"title": "关键技术与方法", "keywords": [q, "关键技术", "方法"], "path": ["学术论文", "技术白皮书", "开源实现"]},
+            {"title": "应用场景与案例", "keywords": [q, "应用场景", "案例"], "path": ["行业报告", "案例分析", "企业实践"]},
+            {"title": "优势劣势与挑战", "keywords": [q, "优劣分析", "挑战"], "path": ["对比研究", "失败案例", "风险合规"]},
+            {"title": "趋势与建议", "keywords": [q, "前沿趋势", "建议"], "path": ["趋势报告", "投研分析", "专家意见"]},
+        ]
+        return directions[:5]
+
     def _extract_and_expand_keywords(self, query: str) -> str:
         """从查询中提取和扩展关键词以增强搜索效果"""
         # 去除多余空格并确保查询清晰
@@ -521,19 +520,26 @@ class ResearchAgent:
     
     async def _validate_findings(self, analysis_result: Dict[str, Any], gathered_info: Dict[str, Any]) -> Dict[str, Any]:
         """验证结果的准确性和可靠性"""
-        # 目前，我们实现基本验证
-        # 在真实系统中，这将涉及交叉引用、事实核查等
         
         sources = gathered_info.get("sources", [])
+        claims = []
+        for kp in analysis_result.get("key_findings", [])[:5]:
+            claims.append(str(kp))
+        fc = await self._fact_check(claims, sources)
         validation_result = {
             "source_credibility_assessment": self._assess_source_credibility(sources),
-            "fact_check_status": "pending",  # 将通过事实核查工具实现
+            "fact_check_status": fc.get("status"),
+            "fact_check_score": fc.get("score"),
+            "fact_check_details": fc.get("details", []),
             "confidence_level": self._calculate_confidence(analysis_result, sources),
-            "validation_notes": "执行基本验证。完整事实核查需要额外工具。",
+            "validation_notes": "包含基础事实核查与来源可信度评估",
             "validated_at": datetime.now().isoformat()
         }
         
         return validation_result
+
+    async def _fact_check(self, claims: List[str], context_sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return await self.fact_check_tool.check_claims(claims, context_sources)
     
     def _extract_key_points(self, analysis_text: str) -> List[str]:
         """从分析文本中提取关键点"""
@@ -648,3 +654,170 @@ class ResearchAgent:
         except Exception as e:
             logger.error(f"辩论分析过程中出错: {str(e)}")
             return f"辩论分析失败: {str(e)}"
+
+    async def _compose_sections_v2(self, gathered_info: Dict[str, Any], outline: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
+        infos = gathered_info.get("information", [])
+        top_infos = infos[:6]
+        evidence_items = []
+        for idx, info in enumerate(top_infos):
+            src = info.get("source", {})
+            evidence_items.append({
+                "id": idx + 1,
+                "title": src.get("title", ""),
+                "url": src.get("url", ""),
+                "snippet": (info.get("content", "")[:800] if info.get("content") else src.get("summary", "")[:800])
+            })
+        corpus_blocks = []
+        for ev in evidence_items:
+            corpus_blocks.append(f"[#{ev['id']}] {ev['title']}\n{ev['snippet']}")
+        corpus = "\n\n".join(corpus_blocks)
+        priorities = [d.get("title", "") for d in (outline or [])][:5]
+        prompt = (
+            "你是一名专业中文研究报告撰写专家。\n"
+            f"命题：{query}\n"
+            f"优先结构方向：{', '.join(priorities)}\n"
+            "请严格基于下列真实证据（每条以[#编号]标注），输出JSON：\n"
+            "字段：findings(数组:{text, evidence_ids}), conclusions(数组:{text, evidence_ids}), recommendations(数组:{text, reason, evidence_ids})。\n"
+            "要求：内容必须为中文、具体、避免套话；每部分3-6条；发现/结论均需引用证据编号；建议需给出依据。\n"
+            "证据如下：\n" + corpus
+        )
+        findings: List[Dict[str, Any]] = []
+        conclusions: List[Dict[str, Any]] = []
+        recommendations: List[Dict[str, Any]] = []
+        try:
+            resp = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            txt = resp.content if hasattr(resp, "content") else str(resp)
+            import json, re
+            m = re.search(r"\{[\s\S]*\}$", txt.strip())
+            payload = json.loads(m.group(0) if m else txt)
+            findings = payload.get("findings", [])
+            conclusions = payload.get("conclusions", [])
+            recommendations = payload.get("recommendations", [])
+        except Exception:
+            findings = [{"text": "需补充领域数据以识别关键瓶颈", "evidence_ids": []}]
+            conclusions = [{"text": "现有证据不足以形成强结论", "evidence_ids": []}]
+            recommendations = [{"text": "追加检索、补充权威来源并开展试点验证", "reason": "提高证据充分性", "evidence_ids": []}]
+        return {
+            "findings": findings[:6],
+            "conclusions": conclusions[:6],
+            "recommendations": recommendations[:6],
+            "evidence": evidence_items
+        }
+    async def _compose_longform_article(self, module: Dict[str, Any], query: str, outline: List[Dict[str, Any]]) -> str:
+        priorities = [d.get("title", "") for d in (outline or [])][:5]
+        findings = module.get("findings", [])
+        conclusions = module.get("conclusions", [])
+        recommendations = module.get("recommendations", [])
+        evidence = module.get("evidence", [])
+        corpus_blocks = []
+        for ev in evidence[:10]:
+            corpus_blocks.append(f"[#{ev.get('id')}] {ev.get('title')}\n{ev.get('snippet','')}")
+        corpus = "\n\n".join(corpus_blocks)
+        prompt = (
+            "你是一位专业中文研报撰写专家，请据以下命题与证据撰写一篇完整文章（非提纲、非要点）。\n"
+            f"命题：{query}\n"
+            f"结构方向：{', '.join(priorities)}\n"
+            "写作要求：\n- 文章体，段落化，避免列表与套话；\n- 严谨、可读性强，必要处引用证据编号[#n]；\n- 结尾给出可执行建议（不超过3条）。\n"
+            "证据：\n" + corpus + "\n"
+            "可参考要点：\n" + "\n".join([f"- 发现：{f.get('text','')}" for f in findings[:5]]) + "\n"
+            + "\n".join([f"- 结论：{c.get('text','')}" for c in conclusions[:5]])
+        )
+        try:
+            resp = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            return resp.content if hasattr(resp, "content") else str(resp)
+        except Exception:
+            # 本地回退：基于模块要点合成段落文章
+            parts = []
+            parts.append(f"围绕命题“{query}”，我们根据公开来源开展系统性研究，优先参考{', '.join([d for d in priorities if d])}等方向。")
+            if findings:
+                pf = "；".join([f.get("text", "") for f in findings[:5] if f.get("text")])
+                parts.append(f"核心发现包括：{pf}。")
+            if conclusions:
+                pc = "；".join([c.get("text", "") for c in conclusions[:5] if c.get("text")])
+                parts.append(f"据此，我们形成的分析结论为：{pc}。")
+            if recommendations:
+                pr = "；".join([r.get("text", "") for r in recommendations[:3] if r.get("text")])
+                parts.append(f"基于上述证据与分析，建议：{pr}。")
+            if evidence:
+                refs = ", ".join([f"[#${ev.get('id')}]" for ev in evidence[:6]])
+                parts.append(f"文中关键论点可对应以上证据编号（例如：{refs}）。")
+            return "\n\n".join(parts)
+
+    async def _polish_article(self, raw_article: str, module: Dict[str, Any], query: str) -> str:
+        findings = module.get("findings", [])
+        conclusions = module.get("conclusions", [])
+        evidence = module.get("evidence", [])
+        refs = []
+        for ev in evidence[:10]:
+            t = ev.get("title", "")
+            u = ev.get("url", "")
+            if t or u:
+                refs.append(f"- {t} {u}")
+        prompt = (
+            "请将以下研究内容润色为一篇可直接面向读者发布的中文报告："
+            f"\n题目：{query}"
+            "\n要求：段落化叙述，去除列表化与JSON痕迹，语言专业但易读，逻辑清晰，避免模板语；适度引用证据编号；结尾附上简短建议与参考来源。"
+            "\n原始正文：\n" + (raw_article or "") + "\n"
+            "\n关键发现：\n" + "\n".join([f.get("text", "") for f in findings[:6]]) + "\n"
+            "\n分析结论：\n" + "\n".join([c.get("text", "") for c in conclusions[:6]]) + "\n"
+            "\n参考来源（标题与链接，仅供写作参考）：\n" + "\n".join(refs)
+        )
+        try:
+            resp = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            return resp.content if hasattr(resp, "content") else str(resp)
+        except Exception:
+            return raw_article
+    async def _compose_sections(self, gathered_info: Dict[str, Any], outline: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
+        infos = gathered_info.get("information", [])
+        # 选取最相关的前6条信息作为证据
+        top_infos = infos[:6]
+        evidence_items = []
+        for idx, info in enumerate(top_infos):
+            src = info.get("source", {})
+            evidence_items.append({
+                "id": idx + 1,
+                "title": src.get("title", ""),
+                "url": src.get("url", ""),
+                "snippet": (info.get("content", "")[:800] if info.get("content") else src.get("summary", "")[:800])
+            })
+        # 组装上下文（截断以控制长度）
+        corpus_blocks = []
+        for ev in evidence_items:
+            corpus_blocks.append(f"[#{ev['id']}] {ev['title']}\n{ev['snippet']}")
+        corpus = "\n\n".join(corpus_blocks)
+        # 领域方向用于强调优先结构
+        priorities = [d.get("title", "") for d in (outline or [])][:5]
+        prompt = (
+            "你是一名专业中文研究报告撰写专家。\n"
+            f"命题：{query}\n"
+            f"优先结构方向：{', '.join(priorities)}\n"
+            "请严格基于下列真实证据（每条以[#编号]标注），生成 JSON 格式输出：\n"
+            "{\n  findings: [{text: '示例', evidence_ids: [编号]}],\n"
+            "  conclusions: [{text: '示例', evidence_ids: [编号]}],\n"
+            "  recommendations: [{text: '示例', reason: '依据与可行性', evidence_ids: [编号]}]\n}"
+            "要求：\n- 内容必须为中文、具体、避免套话；\n- 每部分3-6条；\n- findings与conclusions需引用相关证据编号；\n- recommendations需可执行、说明依据。\n"
+            "证据如下：\n" + corpus
+        )
+        findings: List[Dict[str, Any]] = []
+        conclusions: List[Dict[str, Any]] = []
+        recommendations: List[Dict[str, Any]] = []
+        try:
+            resp = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            txt = resp.content if hasattr(resp, "content") else str(resp)
+            import json, re
+            # 尝试提取JSON块
+            m = re.search(r"\{[\s\S]*\}$", txt.strip())
+            payload = json.loads(m.group(0) if m else txt)
+            findings = payload.get("findings", [])
+            conclusions = payload.get("conclusions", [])
+            recommendations = payload.get("recommendations", [])
+        except Exception:
+            findings = [{"text": "需补充领域数据以识别关键瓶颈", "evidence_ids": []}]
+            conclusions = [{"text": "现有证据不足以形成强结论", "evidence_ids": []}]
+            recommendations = [{"text": "追加检索、补充权威来源并开展试点验证", "reason": "提高证据充分性", "evidence_ids": []}]
+        return {
+            "findings": findings[:6],
+            "conclusions": conclusions[:6],
+            "recommendations": recommendations[:6],
+            "evidence": evidence_items
+        }

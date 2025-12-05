@@ -37,6 +37,13 @@
         <h2>Analysis</h2>
         <p>{{ analysis }}</p>
     </div>
+
+    {% if knowledge_graph_mermaid %}
+    <div class="section">
+        <h2>Knowledge Graph</h2>
+        <pre>{{ knowledge_graph_mermaid }}</pre>
+    </div>
+    {% endif %}
     
     {% if sources and include_sources %}
     <div class="section">
@@ -47,6 +54,21 @@
             <p>{{ source.summary[:200] }}...</p>
         </div>
         {% endfor %}
+        {% if credibility_matrix %}
+        <h3>Source Credibility Matrix</h3>
+        <table border="1" cellpadding="6">
+            <tr><th>Title</th><th>Domain</th><th>Peer Review</th><th>Timeliness</th><th>Relevance</th></tr>
+            {% for row in credibility_matrix %}
+            <tr>
+                <td>{{ row.title[:20] }}</td>
+                <td>{{ row.domain }}</td>
+                <td>{{ row.peer_review }}</td>
+                <td>{{ row.timeliness }}</td>
+                <td>{{ '%.2f'|format(row.relevance) }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
     </div>
     {% endif %}
     
@@ -68,6 +90,34 @@
         {% for gap in gaps %}
             <li>{{ gap }}</li>
         {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if methodology %}
+    <div class="section">
+        <h2>Methodology</h2>
+        <h3>Strategy Steps</h3>
+        <ul>
+            {% for s in methodology.strategy %}
+            <li>{{ s }}</li>
+            {% endfor %}
+        </ul>
+        <h3>Parameter Inference</h3>
+        <pre>{{ methodology.inference }}</pre>
+        <h3>Iterations</h3>
+        <p>{{ methodology.iterations }}</p>
+    </div>
+    {% endif %}
+
+    {% if evaluation_metrics %}
+    <div class="section">
+        <h2>Evaluation Metrics</h2>
+        <ul>
+            <li>Coverage Iterations: {{ evaluation_metrics.coverage_iterations }}</li>
+            <li>Source Diversity: {{ evaluation_metrics.source_diversity }}</li>
+            <li>Closure: {{ '%.2f'|format(evaluation_metrics.closure) }}</li>
+            <li>Quality Warning: {{ evaluation_metrics.quality_warning }}</li>
         </ul>
     </div>
     {% endif %}

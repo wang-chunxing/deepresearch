@@ -19,10 +19,6 @@ api_router = APIRouter()
 # 请求/响应模型
 class ResearchRequest(BaseModel):
     query: str = Field(..., description="要研究的查询或主题")
-    max_sources: int = Field(default=10, description="要收集的最大来源数")
-    report_format: str = Field(default="markdown", description="报告的输出格式")
-    include_sources: bool = Field(default=True, description="是否包含来源引用")
-    depth: str = Field(default="comprehensive", description="研究深度（basic, standard, comprehensive）")
 
 
 class ResearchResponse(BaseModel):
@@ -72,12 +68,7 @@ async def start_research(request: ResearchRequest):
     asyncio.create_task(
         _execute_research_task(
             task_id=task_id,
-            research_agent=research_agent,
-            query=request.query,
-            max_sources=request.max_sources,
-            report_format=request.report_format,
-            include_sources=request.include_sources,
-            depth=request.depth
+            query=request.query
         )
     )
     
@@ -160,12 +151,7 @@ async def get_task_status(task_id: str):
 # 后台任务实现
 async def _execute_research_task(
     task_id: str,
-    research_agent: ResearchAgent,
     query: str,
-    max_sources: int,
-    report_format: str,
-    include_sources: bool,
-    depth: str
 ):
     """
     在后台执行研究任务。
@@ -174,31 +160,23 @@ async def _execute_research_task(
         task_storage[task_id]["progress"] = 0.1
         task_storage[task_id]["message"] = "初始化研究过程"
         
-        # 使用研究代理执行研究
+        from main import research_agent, memory_manager, report_generator, learning_manager
+        from src.workflows.research_graph import ResearchGraphRunner
+        runner = ResearchGraphRunner(research_agent, memory_manager, report_generator, __import__("config"), learning_manager)
         task_storage[task_id]["progress"] = 0.2
-        task_storage[task_id]["message"] = "收集信息"
-        
-        research_result = await research_agent.research(
-            query=query,
-            max_sources=max_sources,
-            depth=depth
-        )
-        
-        task_storage[task_id]["progress"] = 0.8
+        task_storage[task_id]["message"] = "执行工作流"
+        state = await runner.run(query, task_id=task_id)
+        task_storage[task_id]["progress"] = 0.9
         task_storage[task_id]["message"] = "生成报告"
-        
-        # 生成报告
-        report = await research_agent.generate_report(
-            research_result=research_result,
-            format_type=report_format,
-            include_sources=include_sources
-        )
-        
+        report = state.get("report")
+        research_result = state.get("research_result", {})
         task_storage[task_id]["progress"] = 1.0
         task_storage[task_id]["message"] = "研究成功完成"
         task_storage[task_id]["status"] = "completed"
         task_storage[task_id]["report"] = report
         task_storage[task_id]["sources"] = research_result.get("sources", [])
+        task_storage[task_id]["metrics"] = state.get("evaluation_metrics", {})
+        task_storage[task_id]["research_result"] = research_result
         task_storage[task_id]["completed_at"] = datetime.now()
         
         logger.info(f"研究任务 {task_id} 成功完成")
@@ -210,3 +188,19 @@ async def _execute_research_task(
         task_storage[task_id]["completed_at"] = datetime.now()
         task_storage[task_id]["progress"] = 1.0
         task_storage[task_id]["message"] = f"研究失败: {str(e)}"
+@api_router.get("/research/{task_id}/download", tags=["research"])
+async def download_report(task_id: str, format: str = "markdown"):
+    from fastapi.responses import Response
+    if task_id not in task_storage:
+        raise HTTPException(status_code=404, detail="任务未找到")
+    task = task_storage[task_id]
+    if task.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="任务未完成")
+    content = task.get("report")
+    if format in ("html", "markdown") and task.get("research_result"):
+        from main import report_generator
+        rr = task.get("research_result")
+        content = await report_generator.generate_report(rr, format_type=format, include_sources=True)
+    filename = f"report_{task_id}.{ 'html' if format=='html' else 'md'}"
+    media = "text/html" if format == "html" else "text/markdown"
+    return Response(content=content or "", media_type=media, headers={"Content-Disposition": f"attachment; filename={filename}"})
